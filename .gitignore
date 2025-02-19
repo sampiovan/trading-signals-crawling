@@ -1,0 +1,29 @@
+# Credenziali e sessioni
+config.ini
+*.session
+*.session-journal
+
+# Log
+logs/
+*.log
+
+# Output CSV generati a runtime
+trading_signals.csv
+order_registry.csv
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# MetaTrader (binari compilati)
+*.ex4
+
+# IDE / OS
+.idea/
+.vscode/
+Thumbs.db
+.DS_Store
