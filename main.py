@@ -1,9 +1,54 @@
+import os
+import logging
+from logging.handlers import TimedRotatingFileHandler
 import asyncio
-import re
 import csv
 import configparser
 from datetime import datetime
 from telethon import TelegramClient, events
+
+from msg_parser import parse_message
+
+
+# ----- Logger -----------------------------
+# Crea cartella logs se non esiste
+logs_dir = "logs"
+os.makedirs(logs_dir, exist_ok=True)
+
+# Percorso del file di log (base)
+log_file_path = os.path.join(logs_dir, "crawler.log")
+
+# Crea il logger
+logger = logging.getLogger("data_crawler")
+logger.setLevel(logging.INFO)  # livello di default (puoi metterlo su DEBUG, WARNING, ecc.)
+
+# TimedRotatingFileHandler
+# - when='midnight': ruota il file di log a mezzanotte
+# - interval=1: ruota ogni 1 'when'
+# - backupCount=30: mantiene 30 file di log, poi elimina i più vecchi
+handler = TimedRotatingFileHandler(
+	log_file_path, 
+	when='midnight', 
+	interval=1, 
+	backupCount=30,
+	encoding='utf-8'
+)
+
+# Nome del file dopo la rotazione (suffix con data)
+handler.suffix = "%Y-%m-%d"
+
+# Formattazione del log
+formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+handler.setFormatter(formatter)
+
+# Aggiunge il handler al logger
+logger.addHandler(handler)
+
+# Se vuoi disabilitare i messaggi su console, rimuovi la riga sotto
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
+# ----- end of Logger ----------------------
 
 
 # ----- Lettura del file di configurazione -----
@@ -15,104 +60,88 @@ api_id = int(config['telegram']['YOUR_API_ID'])
 api_hash = config['telegram']['YOUR_API_HASH']
 
 # Nome della sessione: verrà creato un file "session_name.session" per salvare la sessione
-session_name = config['telegram']['session_name']
+session_name = config['telegram']['SESSION_NAME']
 
 # Nome del canale (username o ID) da cui vuoi estrarre i messaggi.
 # Per un canale privato, puoi usare l'invito oppure l'ID (se lo conosci)
-channel_entity = config['telegram']['channel_entity']
+channel_entity = config['telegram']['CHANNEL_ENTITY']
 
 
 # ----- Impostazione del file CSV per salvare i segnali -----
 # Percorso del file CSV di output
+mt4_files_folder = config['paths']['MT4_FILES_FOLDER']
 csv_filename = 'trading_signals.csv'
+
+# Costruiamo il path completo del file CSV
+csv_fullpath = os.path.join(mt4_files_folder, csv_filename)
 
 # Se il file non esiste, creiamo l'header
 def initialize_csv():
 	try:
-		with open(csv_filename, 'x', newline='', encoding='utf-8') as csvfile:
+		with open(csv_fullpath, 'x', newline='', encoding='utf-8') as csvfile:
 			writer = csv.writer(csvfile)
-			writer.writerow(['timestamp', 'asset', 'signal_type', 'entry', 'sl', 'tp'])
-			print(f"File {csv_filename} creato con header.")
+			# Header per messaggi di tipo "signal", "open", "modify", "close", "cancel"
+			writer.writerow(['timestamp', 'message_type', 'asset', 'signal_type', 'entry', 'sl', 'tp', 'extra'])
+			logger.info(f"File {csv_filename} creato con header.")
 	except FileExistsError:
 		pass # Il file esiste già, non fare nulla
-
-
-# ----- Funzione per analizzare il messaggio e estrarre i dati con espressioni regolari -----
-def parse_signal(message_text):
-	# Definiamo un pattern base: personalizza questo pattern in base al formato dei tuoi messaggi
-	"""
-    Esempio di messaggio:
-    "📈BUY LIMIT  CAD/CHF
-    Prezzo 0.63600  (di apertura)
-    
-    Stop Loss   🔴 0.58000
-    
-    Take Profit  🟢  0.68000 
-    
-    ..."
-    """
-	pattern = re.compile(
-		# r"SIGNAL:\s*(BUY|SELL(?:\s+LIMIT|(?:\s+STOP))?)\s+(\w+)\s+Entry:\s*([\d\.]+)\s+SL:\s*([\d\.]+)\s+TP:\s*([\d\.]+)",
-		# re.IGNORECASE
-		r"(?i)^(?:\S+\s*)?(BUY LIMIT|SELL LIMIT|BUY STOP|SELL STOP|BUY|SELL)\s+([A-Z]{3}/[A-Z]{3}).*?Prezzo\s+([\d\.]+).*?Stop Loss\s*[^\d]*([\d\.]+).*?Take Profit\s*[^\d]*([\d\.]+)",
-        re.DOTALL
-	)
-	match = pattern.search(message_text)
-	if match:
-		signal_type = match.group(1).upper()
-		asset = match.group(2).upper()
-		entry = match.group(3)
-		sl = match.group(4)
-		tp = match.group(5)
-		return {
-			'asset': asset,
-			'signal_type': signal_type,
-			'entry': entry,
-			'sl': sl,
-			'tp': tp
-		}
-	else:
-		return None
 
 
 # ----- Funzione per salvare i dati estratti nel file CSV -----
 def save_signal(data):
 	timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-	with open(csv_filename, 'a', newline='', encoding='utf-8') as csvfile:
+	with open(csv_fullpath, 'a', newline='', encoding='utf-8') as csvfile:
 		writer = csv.writer(csvfile)
-		writer.writerow([timestamp, data['asset'], data['signal_type'], data['entry'], data['sl'], data['tp']])
-	print(f"Salvato segnale: {data} a {timestamp}")
+		writer.writerow([
+			timestamp,
+			data['message_type'],
+			data['asset'],
+			data['signal_type'],
+			data['entry'],
+			data['sl'],
+			data['tp'],
+			data['extra']
+		])
+	logger.info(f"Segnale salvato: {data} a {timestamp}")
 
 
 # ----- Funzione principale asincrona -----
 async def main():
+	logger.info("Avvio del crawler")
+
 	# Inizializza il file CSV
 	initialize_csv()
 
 	# Crea il client Telegram utilizzando le credenziali dal config.ini
 	client = TelegramClient(session_name, api_id, api_hash)
 	await client.start()
-	print("Client Telegram avviato.")
+	logger.info("Client Telegram avviato.")
 
 	# Ottieni l'entità del canale (per canali privati, devi essere già membro)
 	channel = await client.get_entity(channel_entity)
-	print(f"Monitoro il canale: {channel.title if hasattr(channel, 'title') else channel}")
+	logger.info(f"Monitoro il canale: {channel.title if hasattr(channel, 'title') else channel}")
 
 	# Registra un event handler per i nuovi messaggi nel canale
 	@client.on(events.NewMessage(chats=channel))
 	async def handler(event):
 		message_text = event.raw_text
-		print(f"Nuovo messaggio ricevuto: \n{message_text}\n")
-		signal = parse_signal(message_text)
-		if signal:
-			save_signal(signal)
+		logger.info(f"Nuovo messaggio ricevuto: \n{message_text}\n\n")
+		#signal = parse_signal(message_text)
+		parsed = parse_message(message_text)
+		if parsed:
+			save_signal(parsed)
 		else:
-			print("Messaggio non riconosciuto come segnale di trading.")
+			logger.info("Messaggio non riconosciuto come segnale di trading.")
 
-	print("In ascolto dei nuovi messaggi... (premi Ctrl+C per terminare)")
+	logger.info("In ascolto dei nuovi messaggi... (premi Ctrl+C per terminare)")
 	# Rimane in attesa indefinitamente
 	await client.run_until_disconnected()
 
 # ----- Avvia il loop principale -----
 if __name__ == '__main__':
-	asyncio.run(main())
+	try:
+		asyncio.run(main())
+	except KeyboardInterrupt:
+		logger.info("Arresto da tastiera. Fine.")
+	except Exception:
+		logger.exception("Errore inaspettato durante l'esecuzione del crawler")
