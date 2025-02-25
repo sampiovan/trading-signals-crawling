@@ -1,12 +1,24 @@
 import re
 
+from order_registry_manager import ORDER_REGISTRY, load_order_registry, get_order_ticket
+from utils import generate_magic
 
-# ----- Funzione per analizzare i messaggi e estrarre i segnali con espressioni regolari -----
+
+# Definiamo una eccezione personalizzata
+class OrderNotFoundException(Exception):
+	pass
+
+
+"""
+Funzione principale che prova a riconoscere il tipo di messaggio
+chiamando in sequenza le funzioni dedicate. Prima di ogni parsing,
+viene aggiornato il registro globale degli ordini.
+"""
 def parse_message(message_text):
-	"""
-	Funzione principale che prova a riconoscere il tipo di messaggio
-	chiamando in sequenza le funzioni dedicate.
-	"""
+	global ORDER_REGISTRY
+	load_order_registry()	# Aggiorna il registro globale
+	print("Registro caricato:", ORDER_REGISTRY)
+
 	parsers = [
 		parse_order_placement,
 		parse_order_open,
@@ -19,7 +31,6 @@ def parse_message(message_text):
 		result = parser(message_text)
 		if result:
 			return result
-	
 	return None
 
 
@@ -39,17 +50,19 @@ def parse_order_placement(text):
 		re.DOTALL
 	)
 	match = pattern.search(text)
+
 	if match:
 		return {
+			'order_id': '',			# Non ancora noto al momento della creazione
+			'magic_number': generate_magic(),		# Genera un magic number per il segnale
 			'message_type': 'placement',
 			'signal_type': match.group(1).upper(),
 			'asset': match.group(2).upper().replace("/", ""),
 			'entry': match.group(3),
 			'sl': match.group(4),
 			'tp': match.group(5),
-			'extra': ''
+			'comment': ''
 		}
-	
 	return None
 
 
@@ -65,17 +78,28 @@ def parse_order_open(text):
 		re.DOTALL
 	)
 	match = pattern.search(text)
+
 	if match:
+		# Estraggo i valori
+		signal_type = match.group(1).upper()
+		asset = match.group(2).upper().replace("/", "")
+		entry = match.group(3)
+		# Cerca nel registro
+		
+		order_id, magic_number = get_order_ticket(asset, entry, signal_type)
+		if not order_id:
+			raise OrderNotFoundException(f"Order ID non trovato per segnale open: asset={asset}, entry={entry}, signal={signal_type}")
 		return {
+			'order_id': order_id,
+			'magic_number': magic_number,
 			'message_type': 'open',
-			'signal_type': match.group(1).upper(),
-			'asset': match.group(2).upper().replace("/", ""),
-			'entry': match.group(3),
+			'signal_type': signal_type,
+			'asset': asset,
+			'entry': entry,
 			'sl': '',
 			'tp': '',
-			'extra': ''
+			'comment': ''
 		}
-	
 	return None
 
 
@@ -90,17 +114,29 @@ def parse_order_modify(text):
 		re.DOTALL
 	)
 	match = pattern.search(text)
+
 	if match:
+		# Estraggo i valori
+		signal_type = match.group(1).upper()
+		asset = match.group(2).upper().replace("/", "")
+		old_price = match.group(3)
+		new_price = match.group(4)	# Vecchio prezzo limite
+
+		# Cerco l'ordine per il vecchio prezzo d'entrata
+		order_id, magic_number = get_order_ticket(asset, old_price, signal_type)
+		if not order_id:
+			raise OrderNotFoundException(f"Order ID non trovato per segnale open: asset={asset}, entry={old_price}, signal={signal_type}")
 		return {
+			'order_id': order_id,
+			'magic_number': magic_number,
 			'message_type': 'modify',
-			'signal_type': match.group(1).upper(),
-			'asset': match.group(2).upper().replace("/", ""),
-			'entry': match.group(4),  # Nuovo prezzo
+			'signal_type': signal_type,
+			'asset': asset,
+			'entry': new_price,		# Nuovo prezzo di ingresso
 			'sl': '',
 			'tp': '',
-			'extra': f"Modifica: da {match.group(3)} a {match.group(4)}"
+			'comment': ''
 		}
-	
 	return None
 
 
@@ -117,17 +153,28 @@ def parse_order_close(text):
 		re.DOTALL
 	)
 	match = pattern.search(text)
+
 	if match:
+		# Estraggo i valori
+		asset = match.group(1).upper().replace("/", "")
+		entry_price = match.group(2)
+		close_price = 0.0
+
+		# Cerco l'ordine per il prezzo d'entrata
+		order_id, magic_number = get_order_ticket(asset, entry_price, '')
+		if not order_id:
+			raise OrderNotFoundException(f"Order ID non trovato per segnale close: asset={asset}, entry={entry_price}")
 		return {
+			'order_id': order_id,
+			'magic_number': magic_number,
 			'message_type': 'close',
-			'asset': match.group(1).upper().replace("/", ""),
-			'signal_type': '',  # Non specificato
-			'entry': match.group(2),  # Prezzo di chiusura
+			'asset': asset,
+			'signal_type': '',	# Non specificato
+			'entry': close_price,	# Prezzo di chiusura
 			'sl': '',
 			'tp': '',
-			'extra': 'Chiusura manuale'
+			'comment': ''
 		}
-	
 	return None
 
 
@@ -142,15 +189,25 @@ def parse_order_cancel(text):
 		re.DOTALL
 	)
 	match = pattern.search(text)
+
 	if match:
+		# Estraggo i valori
+		signal_type = match.group(1).upper()
+		asset = match.group(2).upper().replace("/", "")
+		entry = match.group(3)
+
+		order_id, magic_number = get_order_ticket(asset, entry, signal_type)
+		if not order_id:
+			raise OrderNotFoundException(f"Order ID non trovato per segnale cancel: asset={asset}, entry={entry}, signal={signal_type}")
 		return {
+			'order_id': order_id,
+			'magic_number': magic_number,
 			'message_type': 'cancel',
-			'signal_type': match.group(1).upper(),
-			'asset': match.group(2).upper().replace("/", ""),
-			'entry': match.group(3),  # Prezzo indicato, se utile
+			'signal_type': signal_type,
+			'asset': asset,
+			'entry': entry,
 			'sl': '',
 			'tp': '',
-			'extra': 'Annullamento ordine'
+			'comment': ''
 		}
-
 	return None

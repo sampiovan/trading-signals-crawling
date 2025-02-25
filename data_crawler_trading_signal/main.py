@@ -18,7 +18,7 @@ os.makedirs(logs_dir, exist_ok=True)
 # Percorso del file di log (base)
 log_file_path = os.path.join(logs_dir, "crawler.log")
 
-# Crea il logger
+# Creo il logger
 logger = logging.getLogger("data_crawler")
 logger.setLevel(logging.INFO)  # livello di default (puoi metterlo su DEBUG, WARNING, ecc.)
 
@@ -81,7 +81,7 @@ def initialize_csv():
 		with open(csv_fullpath, 'x', newline='', encoding='utf-8') as csvfile:
 			writer = csv.writer(csvfile)
 			# Header per messaggi di tipo "signal", "open", "modify", "close", "cancel"
-			writer.writerow(['timestamp', 'message_type', 'asset', 'signal_type', 'entry', 'sl', 'tp', 'extra'])
+			writer.writerow(['timestamp', 'order_id', 'magic_number', 'message_type', 'asset', 'signal_type', 'entry', 'sl', 'tp', 'comment'])
 			logger.info(f"File {csv_filename} creato con header.")
 	except FileExistsError:
 		pass # Il file esiste già, non fare nulla
@@ -94,13 +94,15 @@ def save_signal(data):
 		writer = csv.writer(csvfile)
 		writer.writerow([
 			timestamp,
+			data['order_id'],
+			data['magic_number'],
 			data['message_type'],
 			data['asset'],
 			data['signal_type'],
 			data['entry'],
 			data['sl'],
 			data['tp'],
-			data['extra']
+			data['comment']
 		])
 	logger.info(f"Segnale salvato: {data} a {timestamp}")
 
@@ -126,7 +128,8 @@ async def main():
 	async def handler(event):
 		message_text = event.raw_text
 		logger.info(f"Nuovo messaggio ricevuto: \n{message_text}\n\n")
-		#signal = parse_signal(message_text)
+
+		#TODO: aggiungere try/except per gestire eventuali errori
 		parsed = parse_message(message_text)
 		if parsed:
 			save_signal(parsed)
