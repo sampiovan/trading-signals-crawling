@@ -14,24 +14,41 @@
 //====================================================================
 
 /*  Struttura del CSV (esempio):
-    timestamp, message_type, asset, signal_type, entry, sl, tp, extra
+    timestamp, order_id, magic_number, message_type, asset, signal_type, entry, sl, tp, comment
     2023-10-01 15:30:20,placement,CAD/CHF,BUY LIMIT,0.63600,0.58000,0.68000,
     2023-10-01 15:35:00,open,CAD/CHF,BUY,0.63500,,,
     ...
 */
 
-//------------ Input: Nome del file e parametri di default -----------
+//----- Input: Nome del file e parametri di default ------------------
 sinput string   CSV_FILENAME   = "trading_signals.csv"; // deve stare in MQL4/Files/
 sinput double   LOT_SIZE       = 0.01;                  // lotto di default
-sinput int      TIMER_SECONDS  = 30;                    // ogni quanti secondi controllare il CSV
+sinput int      TIMER_SECONDS  = 10;                    // ogni quanti secondi controllare il CSV
 
-//------------ Variabili globali / statiche --------------------------
+//----- Nome del file per il registro degli ordini
+#define ORDER_REGISTRY_FILENAME "order_registry.csv"
+
+//----- Variabili globali / statiche ---------------------------------
 datetime g_lastProcessed = 0; // memorizza l'ultima data/ora processata con successo
 
+// Definizione della struttura dei segnali
+struct SignalInfo {
+   string timestamp;      // "2023-10-01 15:30:20"
+   string order_id;       // #453892372
+   string magic_number;   // 12345
+   string message_type;   // "placement", "open", "modify", "close", "cancel"
+   string asset;          // "CADCHF"
+   string signal_type;    // "BUY LIMIT", "SELL STOP", "BUY", "SELL", ...
+   double entry;          // prezzo di entrata
+   double sl;             // stop loss
+   double tp;             // take profit
+   string comment;        // comment
+};
 
 //--------------------------------------------------------------------
 // Funzioni ausiliarie per la manipolazione delle stringhe
 //--------------------------------------------------------------------
+
 // Funzione per rimuovere spazi bianchi, tab e newline da una stringa
 string MyStringTrim(const string s) {
    int len = StringLen(s);
@@ -79,75 +96,111 @@ string MyStringUpper(string s) {
 }
 
 
-//------------ Struttura per i segnali -------------------------------
-struct SignalInfo {
-   string timestamp;      // "2023-10-01 15:30:20"
-   string message_type;   // "placement", "open", "modify", "close", "cancel"
-   string asset;          // "CADCHF"
-   string signal_type;    // "BUY LIMIT", "SELL STOP", "BUY", "SELL", ...
-   double entry;          // prezzo di entrata
-   double sl;             // stop loss
-   double tp;             // take profit
-   string extra;          // campi extra
-};
+//--------------------------------------------------------------------
+// Funzione per convertire una stringa timestamp ("YYYY-MM-DD HH:MM:SS") in datetime
+//--------------------------------------------------------------------
+datetime ConvertToDateTime(string datetimeStr) {
+   // Se la stringa non contiene "/" o "-" o ":" si assume sia numerica
+   if(StringFind(datetimeStr, "/") == -1 && StringFind(datetimeStr, "-") == -1 && StringFind(datetimeStr, ":") == -1)
+      return StrToInteger(datetimeStr);
 
-//------------ Funzione di parsing di una singola riga CSV -----------
+   int len = StringLen(datetimeStr);
+   // Se la stringa contiene '/' al terzo carattere, assumiamo formato dd/mm/yyyy HH:MM
+   if(len >= 16 && StringGetCharacter(datetimeStr, 2) == '/') {
+      // Estrai dd, mm, yyyy, HH e MM
+      string day    = StringSubstr(datetimeStr, 0, 2);
+      string month  = StringSubstr(datetimeStr, 3, 2);
+      string year   = StringSubstr(datetimeStr, 6, 4);
+      string hour   = StringSubstr(datetimeStr, 11, 2);
+      string minute = StringSubstr(datetimeStr, 14, 2);
+      int dd = StrToInteger(day);
+      int mm = StrToInteger(month);
+      int yyyy = StrToInteger(year);
+      int HH = StrToInteger(hour);
+      int MI = StrToInteger(minute);
+      int SS = 0; // Secondi non forniti, quindi 0
+      
+      return StrToTime(StringFormat("%04d.%02d.%02d %02d:%02d:%02d", yyyy, mm, dd, HH, MI, SS));
+   } else {
+      // Esempio di datetimeStr: "2023-10-01 15:30:20"
+      string datePart = StringSubstr(datetimeStr, 0, 10); // "2023-10-01"
+      string timePart = StringSubstr(datetimeStr, 11, 8); // "15:30:20"
+      
+      // Splittiamo la parte data
+      string dateElems[];
+      StringSplit(datePart, '-', dateElems);
+      if(ArraySize(dateElems) < 3) return 0;
+      
+      int yyyy = StrToInteger(dateElems[0]);
+      int mm   = StrToInteger(dateElems[1]);
+      int dd   = StrToInteger(dateElems[2]);
+      
+      // Splittiamo la parte tempo
+      string timeElems[];
+      StringSplit(timePart, ':', timeElems);
+      if(ArraySize(timeElems) < 3) return 0;
+      
+      int HH = StrToInteger(timeElems[0]);
+      int MI = StrToInteger(timeElems[1]);
+      int SS = StrToInteger(timeElems[2]);
+      
+      return StrToTime(StringFormat("%04d.%02d.%02d %02d:%02d:%02d", yyyy, mm, dd, HH, MI, SS));
+   }
+}
+
+
+//--------------------------------------------------------------------
+// Funzione per parsare una riga del CSV dei segnali
+//--------------------------------------------------------------------
 bool ParseCsvLine(string line, SignalInfo &info) {
    // Dividiamo la riga in 8 colonne
    string parts[];
    int count = StringSplit(line, ',', parts);
-   if(count < 8)
+   if(count < 10)
       return false;
-   
    info.timestamp     = MyStringTrim(parts[0]);
-   info.message_type  = MyStringTrim(parts[1]);
-   info.asset         = MyStringTrim(parts[2]);
-   info.signal_type   = MyStringTrim(parts[3]);
-   info.entry         = StrToDouble(MyStringTrim(parts[4]));
-   info.sl            = StrToDouble(MyStringTrim(parts[5]));
-   info.tp            = StrToDouble(MyStringTrim(parts[6]));
-   info.extra         = MyStringTrim(parts[7]);
+   info.order_id      = MyStringTrim(parts[1]);
+   info.magic_number  = MyStringTrim(parts[2]);
+   info.message_type  = MyStringTrim(parts[3]);
+   info.asset         = MyStringTrim(parts[4]);
+   info.signal_type   = MyStringTrim(parts[5]);
+   info.entry         = StrToDouble(MyStringTrim(parts[6]));
+   info.sl            = StrToDouble(MyStringTrim(parts[7]));
+   info.tp            = StrToDouble(MyStringTrim(parts[8]));
+   info.comment       = MyStringTrim(parts[9]);
    return true;
 }
 
-//------------ Converte "2023-10-01 15:30:20" in datetime ------------
-datetime ConvertToDateTime(string datetimeStr) {
-   // Esempio di datetimeStr: "2023-10-01 15:30:20"
-   // MQL4 non ha un parser built-in molto flessibile, quindi lo facciamo manualmente
-   // Formato: YYYY-MM-DD HH:MM:SS
-   string datePart = StringSubstr(datetimeStr, 0, 10);  // "2023-10-01"
-   string timePart = StringSubstr(datetimeStr, 11, 8); // "15:30:20"
 
-   // Splittiamo la parte data
-   string dateElems[];
-   StringSplit(datePart, '-', dateElems);
-   if(ArraySize(dateElems) < 3) return 0;
-
-   int yyyy = StrToInteger(dateElems[0]);
-   int mm   = StrToInteger(dateElems[1]);
-   int dd   = StrToInteger(dateElems[2]);
-
-   // Splittiamo la parte tempo
-   string timeElems[];
-   StringSplit(timePart, ':', timeElems);
-   if(ArraySize(timeElems) < 3) return 0;
-
-   int HH = StrToInteger(timeElems[0]);
-   int MI = StrToInteger(timeElems[1]);
-   int SS = StrToInteger(timeElems[2]);
-
-   return StrToTime(StringFormat("%04d.%02d.%02d %02d:%02d:%02d", yyyy, mm, dd, HH, MI, SS));
+//------------------------------------------------------------------
+// Funzione per scrivere il ticket dell'ordine in un file CSV di registro
+//------------------------------------------------------------------
+void LogOrderTicket(int ticket, const SignalInfo &info) {
+   int handle = FileOpen(ORDER_REGISTRY_FILENAME, FILE_CSV|FILE_WRITE|FILE_ANSI);
+   if(handle < 0)
+   {
+      Print("Errore nell'aprire il file ", ORDER_REGISTRY_FILENAME, ": ", GetLastError());
+      return;
+   }
+   FileSeek(handle, 0, SEEK_END); // Posiziona il puntatore alla fine del file
+   string timeStr = TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS);
+   string line = timeStr + "," + info.asset + "," + info.signal_type + "," + IntegerToString(ticket);
+   FileWriteString(handle, line + "\n");
+   FileClose(handle);
+   Print("Registrato ticket nel file: ", ticket);
 }
 
-//-------------- Gestione dei vari tipi di segnali ---------------------
+
+//------------------------------------------------------------------
+// Funzioni per l'esecuzione degli ordini
+//------------------------------------------------------------------
 
 // Esempio: piazzamento di un ordine "placement"
 void DoPlacement(const SignalInfo &info) {
    // Distinzione tra BUY LIMIT, SELL LIMIT, BUY STOP, SELL STOP, BUY, SELL
    int cmd;
-   double price = info.entry;
-
    string st = MyStringUpper(MyStringTrim(info.signal_type));
+   
    if(st=="BUY LIMIT")       cmd = OP_BUYLIMIT;
    else if(st=="SELL LIMIT") cmd = OP_SELLLIMIT;
    else if(st=="BUY STOP")   cmd = OP_BUYSTOP;
@@ -159,9 +212,9 @@ void DoPlacement(const SignalInfo &info) {
       return;
    }
 
-   // Esempio di invio ordine
-   // Per ordini a mercato (BUY/SELL) 'price' si ignora e si mette 0.0
    // Per ordini pendenti (BUY LIMIT, SELL LIMIT, BUY STOP, SELL STOP) serve 'price'.
+   double price = info.entry;
+   // Per ordini a mercato (BUY/SELL) 'price' si ignora e si mette 0.0
    if(cmd==OP_BUY || cmd==OP_SELL)
       price = 0.0;
 
@@ -173,15 +226,17 @@ void DoPlacement(const SignalInfo &info) {
       3,            // Slippage
       info.sl,      // StopLoss
       info.tp,      // TakeProfit
-      "EA CSV Trader - Placement", // Comment
+      "Placement", // Comment
       0,            // Magic number
       0,            // Expiration
       clrBlue       // Arrow color
    );
-   if(ticket<0)
+   if(ticket < 0)
       Print("Errore OrderSend placement: ", GetLastError());
-   else
+   else {
       Print("Ordine inviato con successo, ticket=", ticket);
+      LogOrderTicket(ticket, info);
+   }
 }
 
 // Esempio: "open" => potremmo trattarlo come un ordine a mercato
@@ -297,9 +352,12 @@ void DoCancel(const SignalInfo &info) {
       Print("Nessun ordine pendente da cancellare trovato per ", info.asset);
 }
 
-//-------------- Esegue l'azione in base al message_type ----------------
+
+//--------------------------------------------------------------------
+// Funzione per gestire il segnale in base al message_type
+//--------------------------------------------------------------------
 void HandleSignal(const SignalInfo &info) {
-   // Esempio di logica di dispatch
+   // Logica di dispatch
    if(info.message_type=="placement")  DoPlacement(info);
    else if(info.message_type=="open")  DoOpen(info);
    else if(info.message_type=="modify") DoModify(info);
@@ -307,6 +365,47 @@ void HandleSignal(const SignalInfo &info) {
    else if(info.message_type=="cancel") DoCancel(info);
    else Print("Tipo di messaggio non gestito: ", info.message_type);
 }
+
+
+//------------------------------------------------------------------
+// Funzione per leggere il CSV e processare i segnali
+//------------------------------------------------------------------
+void ProcessCsv() {
+   // Apriamo il file in lettura
+   int fileHandle = FileOpen(CSV_FILENAME, FILE_CSV|FILE_READ|FILE_ANSI);
+   if(fileHandle < 0)
+   {
+      Print("Impossibile aprire il file CSV: ", CSV_FILENAME);
+      return;
+   }
+   
+   // Leggiamo riga per riga
+   while(!FileIsEnding(fileHandle))
+   {
+      string line = FileReadString(fileHandle);
+      // Evitiamo righe vuote
+      if(StringLen(line) < 2)
+         continue;
+      
+      // Parsiamo la riga
+      SignalInfo info;
+      if(!ParseCsvLine(line, info))
+         continue; // skip riga mal formattata
+      
+      // Confrontiamo il timestamp
+      datetime dt = info.timestamp;//ConvertToDateTime(info.timestamp);
+      if(dt == 0)
+         continue; // formattazione timestamp errata
+      
+      // Se il timestamp è maggiore dell'ultimo processato, gestiamo il segnale
+      if(dt > g_lastProcessed) {
+         HandleSignal(info);
+         g_lastProcessed = dt;
+      }
+   }
+   FileClose(fileHandle);
+}
+
 
 //+------------------------------------------------------------------+
 //| Expert initialization function: settiamo un timer                |
@@ -317,6 +416,7 @@ int OnInit() {
    return(INIT_SUCCEEDED);
 }
 
+
 //+------------------------------------------------------------------+
 //| Expert deinitialization function: kill timer                     |
 //+------------------------------------------------------------------+
@@ -325,44 +425,12 @@ void OnDeinit(const int reason) {
    Print("EA Crawler_Trading_Signal terminato");
 }
 
+
 //+------------------------------------------------------------------+
 //| Expert timer function: leggiamo il CSV e gestiamo i nuovi segnali|
 //+------------------------------------------------------------------+
 void OnTimer() {
-   // Apriamo il file in lettura
-   int fileHandle = FileOpen(CSV_FILENAME, FILE_CSV|FILE_READ|FILE_ANSI);
-   if(fileHandle<0)
-   {
-      Print("Impossibile aprire il file CSV: ", CSV_FILENAME);
-      return;
-   }
-
-   // Leggiamo riga per riga
-   while(!FileIsEnding(fileHandle))
-   {
-      string line = FileReadString(fileHandle);
-      // Evitiamo righe vuote
-      if(StringLen(line)<2) 
-         continue;
-   
-      // Parsea la riga
-      SignalInfo info;
-      if(!ParseCsvLine(line, info))
-         continue; // skip riga mal formattata
-
-      // Confrontiamo il timestamp
-      datetime dt = ConvertToDateTime(info.timestamp);
-      if(dt==0) 
-         continue; // formattazione timestamp errata
-
-      // Se il timestamp è maggiore dell'ultimo processato, gestiamo il segnale
-      if(dt>g_lastProcessed)
-      {
-         HandleSignal(info);
-         g_lastProcessed = dt;
-      }
-   }
-   FileClose(fileHandle);
+   ProcessCsv();
 }
 
 //+------------------------------------------------------------------+
