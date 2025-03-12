@@ -27,9 +27,9 @@ logger.setLevel(logging.INFO)  # livello di default (puoi metterlo su DEBUG, WAR
 # - interval=1: ruota ogni 1 'when'
 # - backupCount=30: mantiene 30 file di log, poi elimina i più vecchi
 handler = TimedRotatingFileHandler(
-	log_file_path, 
-	when='midnight', 
-	interval=1, 
+	log_file_path,
+	when='midnight',
+	interval=1,
 	backupCount=30,
 	encoding='utf-8'
 )
@@ -62,8 +62,7 @@ api_hash = config['telegram']['YOUR_API_HASH']
 # Nome della sessione: verrà creato un file "session_name.session" per salvare la sessione
 session_name = config['telegram']['SESSION_NAME']
 
-# Nome del canale (username o ID) da cui vuoi estrarre i messaggi.
-# Per un canale privato, puoi usare l'invito oppure l'ID (se lo conosci)
+# Nome del canale (username o ID) da cui vuoi estrarre i messaggi
 channel_entity = config['telegram']['CHANNEL_ENTITY']
 
 

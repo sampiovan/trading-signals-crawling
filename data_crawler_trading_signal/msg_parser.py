@@ -84,7 +84,6 @@ def parse_order_open(text):
 		signal_type = match.group(1).upper()
 		asset = match.group(2).upper().replace("/", "")
 		entry = match.group(3)
-		# Cerca nel registro
 		
 		order_id, magic_number = get_order_ticket(asset, entry, signal_type)
 		if not order_id:
@@ -133,8 +132,8 @@ def parse_order_modify(text):
 			'signal_type': signal_type,
 			'asset': asset,
 			'entry': new_price,		# Nuovo prezzo di ingresso
-			'sl': '',
-			'tp': '',
+			'sl': 0,
+			'tp': 0,
 			'comment': ''
 		}
 	return None
