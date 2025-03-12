@@ -100,52 +100,10 @@ string MyStringUpper(string s) {
 // Funzione per convertire una stringa timestamp ("YYYY-MM-DD HH:MM:SS") in datetime
 //--------------------------------------------------------------------
 datetime ConvertToDateTime(string datetimeStr) {
-   // Se la stringa non contiene "/" o "-" o ":" si assume sia numerica
-   if(StringFind(datetimeStr, "/") == -1 && StringFind(datetimeStr, "-") == -1 && StringFind(datetimeStr, ":") == -1)
-      return StrToInteger(datetimeStr);
+   // Sostituisce tutti i "-" con "."
+   StringReplace(datetimeStr, "-", ".");
 
-   int len = StringLen(datetimeStr);
-   // Se la stringa contiene '/' al terzo carattere, assumiamo formato dd/mm/yyyy HH:MM
-   if(len >= 16 && StringGetCharacter(datetimeStr, 2) == '/') {
-      // Estrai dd, mm, yyyy, HH e MM
-      string day    = StringSubstr(datetimeStr, 0, 2);
-      string month  = StringSubstr(datetimeStr, 3, 2);
-      string year   = StringSubstr(datetimeStr, 6, 4);
-      string hour   = StringSubstr(datetimeStr, 11, 2);
-      string minute = StringSubstr(datetimeStr, 14, 2);
-      int dd = StrToInteger(day);
-      int mm = StrToInteger(month);
-      int yyyy = StrToInteger(year);
-      int HH = StrToInteger(hour);
-      int MI = StrToInteger(minute);
-      int SS = 0; // Secondi non forniti, quindi 0
-      
-      return StrToTime(StringFormat("%04d.%02d.%02d %02d:%02d:%02d", yyyy, mm, dd, HH, MI, SS));
-   } else {
-      // Esempio di datetimeStr: "2023-10-01 15:30:20"
-      string datePart = StringSubstr(datetimeStr, 0, 10); // "2023-10-01"
-      string timePart = StringSubstr(datetimeStr, 11, 8); // "15:30:20"
-      
-      // Splittiamo la parte data
-      string dateElems[];
-      StringSplit(datePart, '-', dateElems);
-      if(ArraySize(dateElems) < 3) return 0;
-      
-      int yyyy = StrToInteger(dateElems[0]);
-      int mm   = StrToInteger(dateElems[1]);
-      int dd   = StrToInteger(dateElems[2]);
-      
-      // Splittiamo la parte tempo
-      string timeElems[];
-      StringSplit(timePart, ':', timeElems);
-      if(ArraySize(timeElems) < 3) return 0;
-      
-      int HH = StrToInteger(timeElems[0]);
-      int MI = StrToInteger(timeElems[1]);
-      int SS = StrToInteger(timeElems[2]);
-      
-      return StrToTime(StringFormat("%04d.%02d.%02d %02d:%02d:%02d", yyyy, mm, dd, HH, MI, SS));
-   }
+   return StrToTime(datetimeStr);
 }
 
 
@@ -153,9 +111,10 @@ datetime ConvertToDateTime(string datetimeStr) {
 // Funzione per parsare una riga del CSV dei segnali
 //--------------------------------------------------------------------
 bool ParseCsvLine(string line, SignalInfo &info) {
-   // Dividiamo la riga in 8 colonne
+   // Dividiamo la riga in 10 colonne
    string parts[];
    int count = StringSplit(line, ',', parts);
+   
    if(count < 10)
       return false;
    info.timestamp     = MyStringTrim(parts[0]);
@@ -176,19 +135,39 @@ bool ParseCsvLine(string line, SignalInfo &info) {
 // Funzione per scrivere il ticket dell'ordine in un file CSV di registro
 //------------------------------------------------------------------
 void LogOrderTicket(int ticket, const SignalInfo &info) {
-   int handle = FileOpen(ORDER_REGISTRY_FILENAME, FILE_CSV|FILE_WRITE|FILE_ANSI);
-   if(handle < 0)
-   {
+   // Apri il file in modalità scrittura (FILE_WRITE|FILE_CSV|FILE_ANSI)
+   int handle = FileOpen(ORDER_REGISTRY_FILENAME, FILE_CSV | FILE_WRITE | FILE_ANSI);
+   if(handle < 0) {
       Print("Errore nell'aprire il file ", ORDER_REGISTRY_FILENAME, ": ", GetLastError());
       return;
    }
-   FileSeek(handle, 0, SEEK_END); // Posiziona il puntatore alla fine del file
-   string timeStr = TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS);
-   string line = timeStr + "," + info.asset + "," + info.signal_type + "," + IntegerToString(ticket);
+   
+   // Verifica se il file è nuovo (dimensione 0) per scrivere l'header
+   bool new_file = false;
+   if(FileSize(handle) == 0)
+      new_file = true;
+      
+   if(new_file) {
+      // Scrivi l'header: timestamp, asset, signal_type, entry, magic, ticket
+      string header = "timestamp,asset,signal_type,entry,magic,ticket";
+      FileWriteString(handle, header + "\n");
+   }
+   
+   // Posiziona il puntatore alla fine del file
+   FileSeek(handle, 0, SEEK_END);
+   
+   // Formatta il timestamp attuale
+   string timeStr = TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS);
+   
+   // Costruisci la riga da scrivere, includendo anche il prezzo d'entrata (entry) e il magic number
+   string line = timeStr + "," + info.asset + "," + info.signal_type + "," +
+                 DoubleToString(info.entry, 5) + "," + info.magic_number + "," + IntegerToString(ticket);
+   
    FileWriteString(handle, line + "\n");
    FileClose(handle);
    Print("Registrato ticket nel file: ", ticket);
 }
+
 
 
 //------------------------------------------------------------------
@@ -270,86 +249,108 @@ void DoOpen(const SignalInfo &info) {
       Print("Ordine APERTO, ticket=", ticket);
 }
 
-// Esempio: "modify" => trovo l'ordine esistente e ne modifico prezzo/SL/TP
+
+// Parametri modificabili in un ordine:
+// - Per ordini a mercato (OP_BUY, OP_SELL): Stop Loss e Take Profit.
+// - Per ordini pendenti (OP_BUYLIMIT, OP_SELLLIMIT, OP_BUYSTOP, OP_SELLSTOP):
+//   il prezzo (entry), Stop Loss, Take Profit e l'expiration (se necessario).
+// Non è possibile modificare: il simbolo, il volume, il tipo d'ordine, il Magic Number, il commento.
 void DoModify(const SignalInfo &info) {
-   // In un caso reale dovresti identificare l'ordine da modificare,
-   // ad esempio scorrendo OrdersTotal() e cercando un commento o un MagicNumber
-   // o in base al symbol e al cmd. Qui facciamo un esempio semplificato.
-
-   bool found = false;
-   for(int i=OrdersTotal()-1; i>=0; i--)
-   {
-      if(OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
-      {
-         if(OrderSymbol()==info.asset)
-         {
-            // Esempio: modifichiamo lo SL/TP
-            double price = OrderOpenPrice();
-            double sl = (info.sl>0) ? info.sl : OrderStopLoss();
-            double tp = (info.tp>0) ? info.tp : OrderTakeProfit();
-
-            bool ok = OrderModify(OrderTicket(), price, sl, tp, 0, clrBlue);
-            if(!ok)
-               Print("Errore OrderModify: ", GetLastError());
-            else
-               Print("Ordine modificato con successo, ticket=", OrderTicket());
-            found = true;
-            break;
-         }
-      }
+   // Converte il ticket (info.order_id) in intero
+   int ticket = StrToInteger(info.order_id);
+   
+   // Seleziona l'ordine tramite il ticket
+   if(!OrderSelect(ticket, SELECT_BY_TICKET, MODE_TRADES)) {
+      Print("Ordine con ticket ", info.order_id, " non selezionato: ", GetLastError());
+      return;
    }
-   if(!found)
-      Print("Nessun ordine da modificare trovato per ", info.asset);
+   
+   // Determina il nuovo prezzo:
+   // - Per ordini pendenti, si modifica il prezzo (usando il valore info.entry).
+   // - Per ordini a mercato, il prezzo non viene modificato (si usa l'OrderOpenPrice()).
+   double newPrice;
+   int orderType = OrderType();
+   if(orderType == OP_BUYLIMIT || orderType == OP_SELLLIMIT ||
+      orderType == OP_BUYSTOP  || orderType == OP_SELLSTOP)
+      newPrice = StrToDouble(info.entry);
+   else
+      newPrice = OrderOpenPrice();  // Per ordini a mercato, il prezzo non è modificabile
+   
+   // Modifica dello Stop Loss e del Take Profit:
+   double newSL = (info.sl > 0) ? info.sl : OrderStopLoss();
+   double newTP = (info.tp > 0) ? info.tp : OrderTakeProfit();
+   
+   // Per ordini pendenti potresti voler gestire anche l'expiration; qui lo impostiamo a 0 (nessuna scadenza)
+   datetime expiration = 0;
+   
+   bool ok = OrderModify(ticket, newPrice, newSL, newTP, expiration, clrBlue);
+   if(!ok)
+      Print("Errore OrderModify per ticket ", info.order_id, ": ", GetLastError());
+   else
+      Print("Ordine modificato con successo, ticket=", info.order_id);
 }
 
-// Esempio: "close" => chiudere un ordine a mercato su un determinato asset
+
+// Chiude un ordine a mercato utilizzando direttamente
+// il ticket fornito in info.order_id
 void DoClose(const SignalInfo &info) {
-   bool found = false;
-   for(int i=OrdersTotal()-1; i>=0; i--)
-   {
-      if(OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
-      {
-         if(OrderSymbol()==info.asset && OrderType()<=OP_SELL) // buy or sell
-         {
-            double lots = OrderLots();
-            double bid = MarketInfo(info.asset, MODE_BID);
-            double ask = MarketInfo(info.asset, MODE_ASK);
-            double price = (OrderType()==OP_BUY) ? bid : ask;
-
-            bool ok = OrderClose(OrderTicket(), lots, price, 3, clrBlue);
-            if(!ok)
-               Print("Errore OrderClose: ", GetLastError());
-            else
-               Print("Ordine chiuso, ticket=", OrderTicket());
-            found = true;
-         }
-      }
+   // Converte il ticket (info.order_id) in intero
+   int ticket = StrToInteger(info.order_id);
+   
+   // Seleziona l'ordine tramite il ticket
+   if(!OrderSelect(ticket, SELECT_BY_TICKET, MODE_TRADES)) {
+      Print("Errore: ordine con ticket ", info.order_id, " non selezionato: ", GetLastError());
+      return;
    }
-   if(!found)
-      Print("Nessun ordine da chiudere trovato per ", info.asset);
+   
+   // Verifica che l'ordine sia un ordine a mercato (OP_BUY o OP_SELL)
+   int orderType = OrderType();
+   if(orderType > OP_SELL) {
+      Print("Errore: l'ordine con ticket ", info.order_id, " non è un ordine a mercato e non può essere chiuso.");
+      return;
+   }
+   
+   double lots = OrderLots();
+   double price;
+   // Per ordini BUY si chiude con il Bid, per ordini SELL con l'Ask
+   if(orderType == OP_BUY)
+      price = MarketInfo(info.asset, MODE_BID);
+   else
+      price = MarketInfo(info.asset, MODE_ASK);
+   
+   // Il parametro "3" in OrderClose() indica lo slippage massimo in punti
+   // accettabile per la chiusura dell'ordine.
+   bool ok = OrderClose(ticket, lots, price, 3, clrBlue);
+   if(!ok)
+      Print("Errore OrderClose per ticket ", info.order_id, ": ", GetLastError());
+   else
+      Print("Ordine chiuso con successo, ticket=", info.order_id);
 }
 
-// Esempio: "cancel" => annullare un ordine pendente
+
+// Cancella un ordine pendente usando il ticket presente in info.order_id
 void DoCancel(const SignalInfo &info) {
-   bool found = false;
-   for(int i=OrdersTotal()-1; i>=0; i--)
-   {
-      if(OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
-      {
-         if(OrderSymbol()==info.asset && OrderType()>=OP_BUYLIMIT)
-         {
-            // Significa che è un pending order
-            bool ok = OrderDelete(OrderTicket());
-            if(!ok)
-               Print("Errore OrderDelete: ", GetLastError());
-            else
-               Print("Ordine pendente cancellato, ticket=", OrderTicket());
-            found = true;
-         }
-      }
+   // Converte l'order_id (info.order_id) in intero
+   int ticket = StrToInteger(info.order_id);
+   
+   // Seleziona l'ordine tramite il ticket
+   if(!OrderSelect(ticket, SELECT_BY_TICKET, MODE_TRADES)) {
+      Print("Errore: ordine con ticket ", info.order_id, " non selezionato: ", GetLastError());
+      return;
    }
-   if(!found)
-      Print("Nessun ordine pendente da cancellare trovato per ", info.asset);
+   
+   // Verifica che l'ordine sia un ordine pendente (OP_BUYLIMIT, OP_SELLLIMIT, OP_BUYSTOP, OP_SELLSTOP)
+   int orderType = OrderType();
+   if(orderType < OP_BUYLIMIT) {
+      Print("Errore: l'ordine con ticket ", info.order_id, " non è un ordine pendente e non può essere cancellato.");
+      return;
+   }
+   
+   // Cancella l'ordine pendente
+   if(!OrderDelete(ticket))
+      Print("Errore OrderDelete per ticket ", info.order_id, ": ", GetLastError());
+   else
+      Print("Ordine pendente cancellato con successo, ticket=", info.order_id);
 }
 
 
@@ -393,7 +394,7 @@ void ProcessCsv() {
          continue; // skip riga mal formattata
       
       // Confrontiamo il timestamp
-      datetime dt = info.timestamp;//ConvertToDateTime(info.timestamp);
+      datetime dt = ConvertToDateTime(info.timestamp);
       if(dt == 0)
          continue; // formattazione timestamp errata
       
