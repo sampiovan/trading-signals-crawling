@@ -11,6 +11,7 @@ from msg_parser import (
     parse_move_sl_all,
     parse_move_sl_breakeven,
     parse_orders_multi_close,
+    parse_close_notification,
     parse_order_close,
     parse_order_cancel,
 )
@@ -405,6 +406,38 @@ def test_move_sl_via_dispatcher(monkeypatch):
 
     signals = parse_message(MSG_MOVE_SL_BREAKEVEN)
     assert len(signals) == 1 and signals[0]['message_type'] == 'move_sl'
+
+
+# ----- parse_close_notification -----
+
+MSG_CLOSED_BREAKEVEN = "CHIUSA A BREAKEVEN  GBP/USD A  (1.35290)✅"
+
+MSG_CLOSED_STOP = (
+    "CHIUSURA IN STOP (4.704.50)\n"
+    "\n"
+    "🔹 Operazione che si è chiusa automaticamente questa notte."
+)
+
+
+def test_close_notifications_recognized_without_action():
+    # Riconosciute ([]), nessun segnale: la chiusura è già avvenuta al broker
+    assert parse_close_notification(MSG_CLOSED_BREAKEVEN) == []
+    assert parse_close_notification(MSG_CLOSED_STOP) == []
+
+
+def test_close_notification_ignores_actionable_closes():
+    # I messaggi di chiusura DA ESEGUIRE non sono notifiche
+    assert parse_close_notification(MSG_CLOSE) is None
+    assert parse_close_notification(MSG_MULTI_CLOSE_2) is None
+    assert parse_close_notification(MSG_NOT_A_SIGNAL) is None
+
+
+def test_close_notification_via_dispatcher(monkeypatch):
+    monkeypatch.setattr(msg_parser, 'load_order_registry', lambda: {})
+
+    # [] = riconosciuto ma senza azioni (diverso da None = non riconosciuto)
+    assert parse_message(MSG_CLOSED_BREAKEVEN) == []
+    assert parse_message(MSG_CLOSED_STOP) == []
 
 
 # ----- parse_message (dispatcher) -----

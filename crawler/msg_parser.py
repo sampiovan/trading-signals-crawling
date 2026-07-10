@@ -41,6 +41,7 @@ def parse_message(message_text, reply_text=None):
 		parse_move_sl_all,
 		lambda text: parse_move_sl_breakeven(text, reply_text),
 		parse_orders_multi_close,	# PRIMA del close singolo: il suo pattern è più generico e catturerebbe (male) i multi-close
+		parse_close_notification,	# idem: notifiche di chiusura automatica, nessuna azione
 		parse_order_close,
 		parse_order_cancel
 	]
@@ -354,6 +355,26 @@ def parse_orders_multi_close(text):
 			f"Multi-close: nessuna delle {len(positions)} posizioni trovata nel registro."
 		)
 	return signals
+
+
+def parse_close_notification(text):
+	"""
+	Riconosce le NOTIFICHE di chiusura automatica: la posizione è già
+	stata chiusa dal broker (stop loss o breakeven raggiunto), quindi
+	non serve alcuna azione — solo log.
+	Esempi:
+		"CHIUSA A BREAKEVEN  GBP/USD A  (1.35290)✅"
+		"CHIUSURA IN STOP (4.704.50)
+
+		🔹 Operazione che si è chiusa automaticamente questa notte."
+
+	Restituisce [] (riconosciuto, nessun segnale) o None se non è una notifica.
+	"""
+	pattern = re.compile(r"(?i)CHIUSA\s+A\s+BREAKEVEN|CHIUSURA\s+IN\s+STOP")
+	if pattern.search(text):
+		logger.info("Notifica di chiusura automatica (SL/breakeven eseguito dal broker): nessuna azione necessaria.")
+		return []
+	return None
 
 
 def parse_order_close(text):
