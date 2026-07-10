@@ -7,6 +7,7 @@ from msg_parser import (
     parse_order_placement,
     parse_order_open,
     parse_order_modify,
+    parse_orders_multi_close,
     parse_order_close,
     parse_order_cancel,
 )
@@ -40,6 +41,36 @@ MSG_CLOSE = (
 )
 
 MSG_CANCEL = "ANNULLARE BUY LIMIT EUR/USD non più valido (1.12500)✅"
+
+MSG_MULTI_CLOSE_2 = (
+    "📊AUD/NZD \n"
+    "\n"
+    "CHIUDERE MANUALMENTE DUE POSIZIONI DI CUI:\n"
+    "\n"
+    "UNA IN PROFITTO su           AUD/NZD   (1.21600) \n"
+    "\n"
+    "UNA IN PROFITTO su          AUD/NZD  (1.21403) \n"
+    "\n"
+    "\n"
+    "TOTALE IN PROFITTO✅✅✅"
+)
+
+MSG_MULTI_CLOSE_4 = (
+    "📊EUR/USD   -  AUD/NZD\n"
+    "\n"
+    "CHIUDERE MANUALMENTE QUATTRO POSIZIONI DI CUI:\n"
+    "\n"
+    "UNA IN PROFITTO su          EUR/USD   (1.14700) \n"
+    "\n"
+    "UNA IN PROFITTO su          AUD/NZD  (1.21700)\n"
+    "\n"
+    "una in perdita su                 AUD/NZD  (1.21300)\n"
+    "\n"
+    "una in perdita su                 AUD/NZD  (1.20961)\n"
+    "\n"
+    "\n"
+    "TOTALE IN PARI O DI POCO IN PROFITTO✅"
+)
 
 MSG_NOT_A_SIGNAL = "Buongiorno a tutti! Oggi mercati laterali, restiamo flat."
 
@@ -156,6 +187,84 @@ def test_cancel_parsed(monkeypatch):
     assert calls['args'] == ('EURUSD', '1.12500', 'BUY LIMIT')
     assert result['message_type'] == 'cancel'
     assert result['order_id'] == '555'
+
+
+# ----- parse_orders_multi_close -----
+
+def test_multi_close_two_positions(monkeypatch):
+    lookups = []
+
+    def fake_lookup(asset, entry, signal_type):
+        lookups.append((asset, entry))
+        return f"t{len(lookups)}", f"m{len(lookups)}"
+
+    monkeypatch.setattr(msg_parser, 'get_order_ticket', fake_lookup)
+    signals = parse_orders_multi_close(MSG_MULTI_CLOSE_2)
+
+    assert lookups == [('AUDNZD', '1.21600'), ('AUDNZD', '1.21403')]
+    assert len(signals) == 2
+    assert all(s['message_type'] == 'close' for s in signals)
+    assert [s['order_id'] for s in signals] == ['t1', 't2']
+
+
+def test_multi_close_four_positions_multi_asset(monkeypatch):
+    lookups = []
+
+    def fake_lookup(asset, entry, signal_type):
+        lookups.append((asset, entry))
+        return f"t{len(lookups)}", f"m{len(lookups)}"
+
+    monkeypatch.setattr(msg_parser, 'get_order_ticket', fake_lookup)
+    signals = parse_orders_multi_close(MSG_MULTI_CLOSE_4)
+
+    # Tutte e 4 le posizioni, con l'asset giusto (anche "una in perdita" minuscolo)
+    assert lookups == [
+        ('EURUSD', '1.14700'),
+        ('AUDNZD', '1.21700'),
+        ('AUDNZD', '1.21300'),
+        ('AUDNZD', '1.20961'),
+    ]
+    assert len(signals) == 4
+
+
+def test_multi_close_partial_lookup_failure(monkeypatch):
+    def fake_lookup(asset, entry, signal_type):
+        # Solo la seconda posizione è nel registro
+        if entry == '1.21403':
+            return '222', '22222'
+        return None, None
+
+    monkeypatch.setattr(msg_parser, 'get_order_ticket', fake_lookup)
+    signals = parse_orders_multi_close(MSG_MULTI_CLOSE_2)
+
+    # Successo parziale: la posizione mancante è saltata, l'altra chiusa
+    assert len(signals) == 1
+    assert signals[0]['order_id'] == '222'
+
+
+def test_multi_close_all_lookups_fail(monkeypatch):
+    monkeypatch.setattr(msg_parser, 'get_order_ticket', lambda *a: (None, None))
+    with pytest.raises(OrderNotFoundException):
+        parse_orders_multi_close(MSG_MULTI_CLOSE_2)
+
+
+def test_multi_close_not_captured_by_single_close(monkeypatch):
+    # Prima del fix il parser single-close catturava il messaggio multi
+    # chiudendo UNA sola posizione: il dispatcher deve produrre N segnali
+    monkeypatch.setattr(msg_parser, 'load_order_registry', lambda: {})
+    monkeypatch.setattr(msg_parser, 'get_order_ticket', lambda *a: ('9', '99999'))
+
+    signals = parse_message(MSG_MULTI_CLOSE_4)
+    assert len(signals) == 4
+
+
+def test_single_close_still_works_via_dispatcher(monkeypatch):
+    monkeypatch.setattr(msg_parser, 'load_order_registry', lambda: {})
+    monkeypatch.setattr(msg_parser, 'get_order_ticket', lambda *a: ('9', '99999'))
+
+    signals = parse_message(MSG_CLOSE)
+    assert len(signals) == 1
+    assert signals[0]['message_type'] == 'close'
 
 
 # ----- parse_message (dispatcher) -----

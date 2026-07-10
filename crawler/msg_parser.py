@@ -37,6 +37,7 @@ def parse_message(message_text, reply_text=None):
 		parse_order_placement,
 		parse_order_open,
 		parse_order_modify,
+		parse_orders_multi_close,	# PRIMA del close singolo: il suo pattern è più generico e catturerebbe (male) i multi-close
 		parse_order_close,
 		parse_order_cancel
 	]
@@ -161,6 +162,62 @@ def parse_order_modify(text):
 			'comment': ''
 		}
 	return None
+
+
+def parse_orders_multi_close(text):
+	"""
+	Riconosce un messaggio di chiusura di PIÙ posizioni e restituisce
+	una lista di segnali 'close', uno per posizione. Le posizioni possono
+	essere anche su asset diversi.
+	Esempio:
+		"📊AUD/NZD
+
+		CHIUDERE MANUALMENTE DUE POSIZIONI DI CUI:
+
+		UNA IN PROFITTO su           AUD/NZD   (1.21600)
+
+		UNA IN PROFITTO su          AUD/NZD  (1.21403)
+
+		TOTALE IN PROFITTO✅✅✅"
+	"""
+	trigger = re.compile(r"(?i)CHIUDERE\s+MANUALMENTE\s+\w+\s+POSIZIONI")
+	if not trigger.search(text):
+		return None
+
+	positions = re.findall(
+		r"(?i)UNA\s+IN\s+(?:PROFITTO|PERDITA|PARI)\s+su\s+([A-Z]{3}/[A-Z]{3})\s*\(([\d\.]+)",
+		text
+	)
+	if not positions:
+		logger.warning("Messaggio multi-close riconosciuto ma nessuna posizione estratta.")
+		return None
+
+	signals = []
+	for raw_asset, entry_price in positions:
+		asset = raw_asset.upper().replace("/", "")
+
+		order_id, magic_number = get_order_ticket(asset, entry_price, '')
+		if not order_id:
+			# Successo parziale: non scartare le altre posizioni del messaggio
+			logger.error(f"Multi-close: ordine non trovato nel registro per asset={asset}, entry={entry_price}. Posizione saltata.")
+			continue
+		signals.append({
+			'order_id': order_id,
+			'magic_number': magic_number,
+			'message_type': 'close',
+			'asset': asset,
+			'signal_type': '',
+			'entry': 0.0,	# Prezzo di chiusura (a mercato)
+			'sl': '',
+			'tp': '',
+			'comment': ''
+		})
+
+	if not signals:
+		raise OrderNotFoundException(
+			f"Multi-close: nessuna delle {len(positions)} posizioni trovata nel registro."
+		)
+	return signals
 
 
 def parse_order_close(text):
