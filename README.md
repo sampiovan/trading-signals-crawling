@@ -2,7 +2,7 @@
 
 Sistema di copy-trading automatico composto da due componenti che comunicano tramite file CSV:
 
-1. **Crawler Python** (`data_crawler_trading_signal/`) — si connette a un canale Telegram con [Telethon](https://docs.telethon.dev/), riconosce i messaggi contenenti segnali di trading e li scrive in un file CSV nella cartella `Files` di MetaTrader 4.
+1. **Crawler Python** (`crawler/`) — si connette a un canale Telegram con [Telethon](https://docs.telethon.dev/), riconosce i messaggi contenenti segnali di trading e li scrive in un file CSV nella cartella `Files` di MetaTrader 4.
 2. **Expert Advisor MQL4** (`mt4/Crawler_Trading_Signal.mq4`) — in esecuzione su MetaTrader 4, legge periodicamente il CSV dei segnali (via `OnTimer`), esegue gli ordini corrispondenti e registra i ticket assegnati dal broker in un secondo CSV (`order_registry.csv`), che il crawler rilegge per associare le operazioni successive (modifica, chiusura, annullamento) all'ordine giusto.
 
 ## Architettura
@@ -25,7 +25,7 @@ order_registry.csv  ──►  riletto dal crawler per risalire a ticket e magic
 
 ### Flusso dei segnali
 
-Il parser ([msg_parser.py](data_crawler_trading_signal/msg_parser.py)) riconosce cinque tipi di messaggio:
+Il parser ([msg_parser.py](crawler/msg_parser.py)) riconosce cinque tipi di messaggio:
 
 | Tipo (`message_type`) | Significato | Esempio di messaggio |
 |---|---|---|
@@ -35,22 +35,26 @@ Il parser ([msg_parser.py](data_crawler_trading_signal/msg_parser.py)) riconosce
 | `close` | Chiusura manuale di una posizione | `CHIUDERE MANUALMENTE UNA POSIZIONE … (1.12500)` |
 | `cancel` | Annullamento di un ordine pendente | `ANNULLARE BUY LIMIT EUR/USD … (1.12500)` |
 
-Al momento del `placement` il crawler genera un **magic number** ([utils.py](data_crawler_trading_signal/utils.py)) che identifica il segnale. L'EA, dopo aver piazzato l'ordine, scrive in `order_registry.csv` la coppia magic number ↔ ticket del broker. Per i messaggi successivi (`open`, `modify`, `close`, `cancel`) il crawler consulta il registro ([order_registry_manager.py](data_crawler_trading_signal/order_registry_manager.py)) e recupera il ticket confrontando asset e prezzo di ingresso.
+Al momento del `placement` il crawler genera un **magic number** ([utils.py](crawler/utils.py)) che identifica il segnale. L'EA, dopo aver piazzato l'ordine, scrive in `order_registry.csv` la coppia magic number ↔ ticket del broker. Per i messaggi successivi (`open`, `modify`, `close`, `cancel`) il crawler consulta il registro ([order_registry.py](crawler/order_registry.py)) e recupera il ticket confrontando asset e prezzo di ingresso.
 
 ## Struttura della repository
 
 ```
 .
-├── data_crawler_trading_signal/   # Package Python del crawler
-│   ├── main.py                    # Entry point: client Telegram, logging, scrittura CSV
+├── crawler/                       # Package Python del crawler
+│   ├── main.py                    # Entry point: client Telegram ed event handler
+│   ├── config.py                  # Caricamento centralizzato di config.ini
+│   ├── log_setup.py               # Configurazione del logging (file + console)
 │   ├── msg_parser.py              # Riconoscimento dei messaggi via regex
-│   ├── order_registry_manager.py  # Lettura di order_registry.csv e lookup dei ticket
+│   ├── order_registry.py          # Lettura di order_registry.csv e lookup dei ticket
+│   ├── signals_csv.py             # Scrittura del CSV dei segnali
 │   └── utils.py                   # Generazione del magic number
 ├── mt4/
 │   └── Crawler_Trading_Signal.mq4 # Expert Advisor per MetaTrader 4
-├── tests/                         # Test (in preparazione)
+├── tests/                         # Test unitari (pytest)
 ├── config.example.ini             # Template di configurazione
 ├── requirements.txt               # Dipendenze Python
+├── requirements-dev.txt           # Dipendenze di sviluppo (pytest, ruff)
 └── README.md
 ```
 
@@ -104,7 +108,7 @@ Parametri di input dell'EA:
 Avvia il crawler dalla cartella del package (il `config.ini` deve trovarsi nella directory di lavoro):
 
 ```bash
-cd data_crawler_trading_signal
+cd crawler
 python main.py
 ```
 
