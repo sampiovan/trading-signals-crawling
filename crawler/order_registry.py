@@ -48,33 +48,63 @@ def load_order_registry():
     return registry
 
 
-def get_order_ticket(asset, entry, signal_type, tol=0.0002):
+def pip_size(asset):
     """
-    Cerca nel registro globale un ordine che corrisponda ai valori indicati nel segnale,
-    usando le chiavi specificate (asset, entry e signal_type).
-    Se viene trovato un record, restituisce la tupla (order_id, magic_number).
+    Dimensione del pip per l'asset: 0.01 per le coppie quotate in JPY,
+    0.0001 per tutte le altre. Una tolleranza assoluta unica sarebbe
+    troppo stretta sulle coppie JPY (che quotano ~150) e troppo larga
+    su altre.
+    """
+    if asset.strip().upper().endswith('JPY'):
+        return 0.01
+    return 0.0001
+
+
+def get_order_ticket(asset, entry, signal_type, tol_pips=2):
+    """
+    Cerca nel registro globale l'ordine che meglio corrisponde ai valori
+    del segnale: stesso asset, stesso signal_type (se indicato nel
+    segnale) ed entry entro tol_pips pip. Tra i candidati viene scelto
+    quello con l'entry più vicina, non il primo trovato.
+    Restituisce la tupla (order_id, magic_number), o (None, None).
     """
     global ORDER_REGISTRY
 
     target_asset = asset.strip().upper()
+    target_signal = signal_type.strip().upper()
 
     try:
         target_entry = float(entry)
     except Exception:
         target_entry = 0.0
 
+    tol = tol_pips * pip_size(target_asset)
+
+    best_record = None
+    best_distance = None
     for magic, record in ORDER_REGISTRY.items():
         record_asset = record.get('asset', '').strip().upper()
+        record_signal = record.get('signal_type', '').strip().upper()
 
         try:
             record_entry = float(record.get('entry', 0))
         except Exception:
             record_entry = 0.0
 
-        # Confronta asset, entry e signal_type
-        if record_asset == target_asset and abs(record_entry - target_entry) < tol:#and record_signal == target_signal:
-            order_id = record.get('ticket', '')
-            magic_number = record.get('magic', '')
-            logger.info(f"Trovato ordine: asset {target_asset}, entry {target_entry}, ticket {order_id}, magic {magic_number}")
-            return order_id, magic_number
+        if record_asset != target_asset:
+            continue
+        # I messaggi di chiusura non indicano il tipo: confronta solo se presente
+        if target_signal and record_signal != target_signal:
+            continue
+
+        distance = abs(record_entry - target_entry)
+        if distance < tol and (best_distance is None or distance < best_distance):
+            best_record = record
+            best_distance = distance
+
+    if best_record:
+        order_id = best_record.get('ticket', '')
+        magic_number = best_record.get('magic', '')
+        logger.info(f"Trovato ordine: asset {target_asset}, entry {target_entry}, ticket {order_id}, magic {magic_number}")
+        return order_id, magic_number
     return None, None
