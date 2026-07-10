@@ -4,6 +4,7 @@ import msg_parser
 from msg_parser import (
     OrderNotFoundException,
     parse_message,
+    parse_market_order,
     parse_order_placement,
     parse_order_open,
     parse_order_modify,
@@ -267,6 +268,62 @@ def test_single_close_still_works_via_dispatcher(monkeypatch):
     signals = parse_message(MSG_CLOSE)
     assert len(signals) == 1
     assert signals[0]['message_type'] == 'close'
+
+
+# ----- parse_market_order -----
+
+MSG_MARKET_SELL = (
+    "📊GBP/USD \n"
+    "\n"
+    "ATTENZIONE QUESTA E' UNA OPERAZIONE IN SELL DIRETTA A MERCATO:\n"
+    "\n"
+    "1) Piazzare un SELL su GBP/USD  ADESSO AL PREZZO ATTUALE:\n"
+    "\n"
+    "📉SELL  GBP/USD \n"
+    "Prezzo 1.34121  (nostro prezzo di apertura)\n"
+    "\n"
+    "Stop Loss   🔴 1.36100\n"
+    "\n"
+    "Take Profit  🟢 1.30000\n"
+    "\n"
+    "\n"
+    "⚠️Attenzione: questo ordine viene messo a Mercato al prezzo attuale del cambio in questione. \n"
+    "\n"
+    "Per eseguirlo bisogna selezionare in alto “esecuzione a mercato “ (al posto del classico "
+    "buy limit/sell limit) ed impostare i valori di stop loss e take profit indicato. "
+    "Poi premere buy/sell by market come indicato nell’ordine"
+)
+
+
+def test_market_order_parsed():
+    result = parse_market_order(MSG_MARKET_SELL)
+    assert result is not None
+    assert result['message_type'] == 'placement'
+    assert result['signal_type'] == 'SELL'   # tipo a mercato, non pendente
+    assert result['asset'] == 'GBPUSD'
+    assert result['entry'] == '1.34121'
+    assert result['sl'] == '1.36100'
+    assert result['tp'] == '1.30000'
+    assert result['order_id'] == ''
+    assert result['magic_number'].isdigit() and len(result['magic_number']) == 5
+
+
+def test_market_order_not_matched_by_placement_parser():
+    # Il parser placement (ancorato a inizio messaggio) non deve catturarlo
+    assert parse_order_placement(MSG_MARKET_SELL) is None
+
+
+def test_market_order_ignores_pending_placement():
+    assert parse_market_order(MSG_PLACEMENT) is None
+    assert parse_market_order(MSG_NOT_A_SIGNAL) is None
+
+
+def test_market_order_via_dispatcher(monkeypatch):
+    monkeypatch.setattr(msg_parser, 'load_order_registry', lambda: {})
+    signals = parse_message(MSG_MARKET_SELL)
+    assert len(signals) == 1
+    assert signals[0]['message_type'] == 'placement'
+    assert signals[0]['signal_type'] == 'SELL'
 
 
 # ----- parse_move_sl_all / parse_move_sl_breakeven -----

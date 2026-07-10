@@ -35,6 +35,7 @@ def parse_message(message_text, reply_text=None):
 	# più generici (es. multi-close prima della chiusura singola).
 	parsers = [
 		parse_order_placement,
+		parse_market_order,
 		parse_order_open,
 		parse_order_modify,
 		parse_move_sl_all,
@@ -86,6 +87,56 @@ def parse_order_placement(text):
 			'comment': ''
 		}
 	return None
+
+
+def parse_market_order(text):
+	"""
+	Riconosce un'operazione diretta a mercato (esecuzione immediata al
+	prezzo corrente, non un ordine pendente).
+	Esempio:
+		"📊GBP/USD
+
+		ATTENZIONE QUESTA E' UNA OPERAZIONE IN SELL DIRETTA A MERCATO:
+
+		1) Piazzare un SELL su GBP/USD  ADESSO AL PREZZO ATTUALE:
+
+		📉SELL  GBP/USD
+		Prezzo 1.34121  (nostro prezzo di apertura)
+
+		Stop Loss   🔴 1.36100
+
+		Take Profit  🟢 1.30000
+		..."
+
+	Produce un segnale 'placement' con signal_type BUY/SELL: l'EA esegue
+	i tipi a mercato al prezzo corrente (Ask/Bid) e registra il ticket con
+	l'entry indicata dal provider, usata poi per il matching dei messaggi
+	successivi (move SL, close).
+	"""
+	trigger = re.compile(r"(?i)OPERAZIONE\s+IN\s+(?:BUY|SELL)\s+DIRETTA\s+A\s+MERCATO")
+	if not trigger.search(text):
+		return None
+
+	pattern = re.compile(
+		r"(?i)(BUY|SELL)\s+([A-Z]{3}/[A-Z]{3})\s*.*?Prezzo\s+([\d\.]+).*?apertura.*?Stop Loss\s*[^\d]*([\d\.]+).*?Take Profit\s*[^\d]*([\d\.]+)",
+		re.DOTALL
+	)
+	match = pattern.search(text)
+	if not match:
+		logger.warning("Operazione a mercato riconosciuta ma blocco ordine non estratto.")
+		return None
+
+	return {
+		'order_id': '',
+		'magic_number': generate_magic(),
+		'message_type': 'placement',
+		'signal_type': match.group(1).upper(),
+		'asset': match.group(2).upper().replace("/", ""),
+		'entry': match.group(3),
+		'sl': match.group(4),
+		'tp': match.group(5),
+		'comment': ''
+	}
 
 
 def parse_order_open(text):
