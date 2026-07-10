@@ -28,8 +28,15 @@ sinput int      TIMER_SECONDS  = 10;                    // ogni quanti secondi c
 //----- Nome del file per il registro degli ordini
 #define ORDER_REGISTRY_FILENAME "order_registry.csv"
 
+//----- Nome del file di stato (righe del CSV già processate)
+#define STATE_FILENAME "crawler_ea_state.txt"
+
 //----- Variabili globali / statiche ---------------------------------
-datetime g_lastProcessed = 0; // memorizza l'ultima data/ora processata con successo
+// Numero di righe di segnale (header esclusa) già processate.
+// Persistito su STATE_FILENAME per sopravvivere ai riavvii dell'EA:
+// senza persistenza, a ogni riavvio il CSV verrebbe rieseguito
+// dall'inizio, duplicando tutti gli ordini.
+int g_processedLines = 0;
 
 // Definizione della struttura dei segnali
 struct SignalInfo {
@@ -135,8 +142,9 @@ bool ParseCsvLine(string line, SignalInfo &info) {
 // Funzione per scrivere il ticket dell'ordine in un file CSV di registro
 //------------------------------------------------------------------
 void LogOrderTicket(int ticket, const SignalInfo &info) {
-   // Apri il file in modalità scrittura (FILE_WRITE|FILE_CSV|FILE_ANSI)
-   int handle = FileOpen(ORDER_REGISTRY_FILENAME, FILE_CSV | FILE_WRITE | FILE_ANSI);
+   // FILE_READ|FILE_WRITE: apre senza troncare. FILE_WRITE da solo azzererebbe
+   // il file a ogni ordine, perdendo tutte le righe del registro precedenti.
+   int handle = FileOpen(ORDER_REGISTRY_FILENAME, FILE_CSV | FILE_READ | FILE_WRITE | FILE_ANSI);
    if(handle < 0) {
       Print("Errore nell'aprire il file ", ORDER_REGISTRY_FILENAME, ": ", GetLastError());
       return;
@@ -169,10 +177,74 @@ void LogOrderTicket(int ticket, const SignalInfo &info) {
 }
 
 
+//------------------------------------------------------------------
+// Aggiorna il prezzo d'entrata di una riga del registro (per magic).
+// Necessario dopo una modify: il crawler cerca gli ordini per prezzo,
+// quindi un registro con l'entry vecchia renderebbe introvabile
+// l'ordine ai segnali successivi (close/cancel sul nuovo prezzo).
+//------------------------------------------------------------------
+void UpdateRegistryEntry(string magic, double newEntry) {
+   int handle = FileOpen(ORDER_REGISTRY_FILENAME, FILE_CSV | FILE_READ | FILE_ANSI);
+   if(handle < 0) {
+      Print("UpdateRegistryEntry: impossibile leggere ", ORDER_REGISTRY_FILENAME, ": ", GetLastError());
+      return;
+   }
+
+   string lines[];
+   int total = 0;
+   while(!FileIsEnding(handle)) {
+      string line = FileReadString(handle);
+      if(StringLen(line) < 2)
+         continue;
+      ArrayResize(lines, total + 1);
+      lines[total] = line;
+      total++;
+   }
+   FileClose(handle);
+
+   // Colonne del registro: timestamp,asset,signal_type,entry,magic,ticket
+   bool updated = false;
+   for(int i = 1; i < total; i++) { // lines[0] è l'header
+      string parts[];
+      if(StringSplit(lines[i], ',', parts) < 6)
+         continue;
+      if(MyStringTrim(parts[4]) == magic) {
+         lines[i] = parts[0] + "," + parts[1] + "," + parts[2] + "," +
+                    DoubleToString(newEntry, 5) + "," + parts[4] + "," + parts[5];
+         updated = true;
+      }
+   }
+   if(!updated) {
+      Print("UpdateRegistryEntry: magic ", magic, " non trovato nel registro");
+      return;
+   }
+
+   // Riscrittura completa: qui il troncamento di FILE_WRITE è voluto
+   handle = FileOpen(ORDER_REGISTRY_FILENAME, FILE_CSV | FILE_WRITE | FILE_ANSI);
+   if(handle < 0) {
+      Print("UpdateRegistryEntry: impossibile riscrivere ", ORDER_REGISTRY_FILENAME, ": ", GetLastError());
+      return;
+   }
+   for(int i = 0; i < total; i++)
+      FileWriteString(handle, lines[i] + "\n");
+   FileClose(handle);
+   Print("Registro aggiornato: magic ", magic, ", nuova entry ", DoubleToString(newEntry, 5));
+}
+
+
 
 //------------------------------------------------------------------
 // Funzioni per l'esecuzione degli ordini
 //------------------------------------------------------------------
+
+// Prezzo corrente per un ordine a mercato: Ask per BUY, Bid per SELL.
+// OrderSend con price=0.0 viene rifiutato dal broker (err. 129 invalid price).
+double MarketOrderPrice(string symbol, int cmd) {
+   RefreshRates();
+   if(cmd == OP_BUY)
+      return MarketInfo(symbol, MODE_ASK);
+   return MarketInfo(symbol, MODE_BID);
+}
 
 // Esempio: piazzamento di un ordine "placement"
 void DoPlacement(const SignalInfo &info) {
@@ -193,9 +265,9 @@ void DoPlacement(const SignalInfo &info) {
 
    // Per ordini pendenti (BUY LIMIT, SELL LIMIT, BUY STOP, SELL STOP) serve 'price'.
    double price = info.entry;
-   // Per ordini a mercato (BUY/SELL) 'price' si ignora e si mette 0.0
+   // Per ordini a mercato (BUY/SELL) serve il prezzo corrente (Ask/Bid)
    if(cmd==OP_BUY || cmd==OP_SELL)
-      price = 0.0;
+      price = MarketOrderPrice(info.asset, cmd);
 
    int ticket = OrderSend(
       info.asset,   // Symbol
@@ -206,7 +278,7 @@ void DoPlacement(const SignalInfo &info) {
       info.sl,      // StopLoss
       info.tp,      // TakeProfit
       "Placement", // Comment
-      0,            // Magic number
+      StrToInteger(info.magic_number), // Magic number generato dal crawler
       0,            // Expiration
       clrBlue       // Arrow color
    );
@@ -218,10 +290,31 @@ void DoPlacement(const SignalInfo &info) {
    }
 }
 
-// Esempio: "open" => potremmo trattarlo come un ordine a mercato
+// Gestione del messaggio "open":
+// - order_id presente: il pending era già stato piazzato e il broker lo
+//   triggera da solo. NON apriamo nulla (aprire qui duplicherebbe la
+//   posizione): verifichiamo solo che sia diventato posizione e logghiamo.
+// - order_id vuoto: ordine diretto a mercato, senza placement precedente.
+//   Apriamo a mercato e registriamo il ticket nel registro.
 void DoOpen(const SignalInfo &info) {
-   // Se info.signal_type == "BUY" => OP_BUY
-   // Se info.signal_type == "SELL" => OP_SELL
+   // --- Caso 1: ordine noto dal registro -> solo verifica e log
+   if(StringLen(info.order_id) > 0) {
+      int knownTicket = StrToInteger(info.order_id);
+      if(!OrderSelect(knownTicket, SELECT_BY_TICKET, MODE_TRADES)) {
+         Print("DoOpen: ordine ", info.order_id,
+               " non trovato tra i trade attivi (chiuso o cancellato?): ", GetLastError());
+         return;
+      }
+      int orderType = OrderType();
+      if(orderType == OP_BUY || orderType == OP_SELL)
+         Print("DoOpen: confermato, il pending ", info.order_id, " è ora una posizione aperta.");
+      else
+         Print("DoOpen: ATTENZIONE, l'ordine ", info.order_id,
+               " risulta ancora pendente nonostante il segnale di apertura.");
+      return;
+   }
+
+   // --- Caso 2: ordine diretto a mercato (nessun placement precedente)
    int cmd = -1;
    string st = MyStringUpper(info.signal_type);
    if(st=="BUY")  cmd = OP_BUY;
@@ -236,17 +329,21 @@ void DoOpen(const SignalInfo &info) {
       info.asset,
       cmd,
       LOT_SIZE,
-      0.0,         // a mercato
+      MarketOrderPrice(info.asset, cmd),
       3,
       info.sl,
       info.tp,
-      "EA CSV Trader - Open",
-      0,0,clrBlue
+      "Open",
+      StrToInteger(info.magic_number),
+      0,
+      clrBlue
    );
    if(ticket<0)
       Print("Errore OrderSend open: ", GetLastError());
-   else
-      Print("Ordine APERTO, ticket=", ticket);
+   else {
+      Print("Ordine diretto a mercato aperto, ticket=", ticket);
+      LogOrderTicket(ticket, info); // senza registrazione il ticket andrebbe perso
+   }
 }
 
 
@@ -270,9 +367,10 @@ void DoModify(const SignalInfo &info) {
    // - Per ordini a mercato, il prezzo non viene modificato (si usa l'OrderOpenPrice()).
    double newPrice;
    int orderType = OrderType();
-   if(orderType == OP_BUYLIMIT || orderType == OP_SELLLIMIT ||
-      orderType == OP_BUYSTOP  || orderType == OP_SELLSTOP)
-      newPrice = StrToDouble(info.entry);
+   bool isPending = (orderType == OP_BUYLIMIT || orderType == OP_SELLLIMIT ||
+                     orderType == OP_BUYSTOP  || orderType == OP_SELLSTOP);
+   if(isPending)
+      newPrice = info.entry;
    else
       newPrice = OrderOpenPrice();  // Per ordini a mercato, il prezzo non è modificabile
    
@@ -286,8 +384,12 @@ void DoModify(const SignalInfo &info) {
    bool ok = OrderModify(ticket, newPrice, newSL, newTP, expiration, clrBlue);
    if(!ok)
       Print("Errore OrderModify per ticket ", info.order_id, ": ", GetLastError());
-   else
+   else {
       Print("Ordine modificato con successo, ticket=", info.order_id);
+      // Mantiene allineato il registro (il crawler cerca gli ordini per entry)
+      if(isPending)
+         UpdateRegistryEntry(info.magic_number, newPrice);
+   }
 }
 
 
@@ -369,6 +471,32 @@ void HandleSignal(const SignalInfo &info) {
 
 
 //------------------------------------------------------------------
+// Persistenza dello stato: numero di righe di segnale già processate
+//------------------------------------------------------------------
+int LoadProcessedLines() {
+   int handle = FileOpen(STATE_FILENAME, FILE_READ|FILE_TXT|FILE_ANSI);
+   if(handle < 0)
+      return 0; // primo avvio: nessuno stato salvato
+   string content = FileReadString(handle);
+   FileClose(handle);
+   int value = StrToInteger(MyStringTrim(content));
+   if(value < 0)
+      value = 0;
+   return value;
+}
+
+void SaveProcessedLines(int count) {
+   int handle = FileOpen(STATE_FILENAME, FILE_WRITE|FILE_TXT|FILE_ANSI);
+   if(handle < 0) {
+      Print("Errore nel salvare lo stato su ", STATE_FILENAME, ": ", GetLastError());
+      return;
+   }
+   FileWriteString(handle, IntegerToString(count));
+   FileClose(handle);
+}
+
+
+//------------------------------------------------------------------
 // Funzione per leggere il CSV e processare i segnali
 //------------------------------------------------------------------
 void ProcessCsv() {
@@ -379,32 +507,61 @@ void ProcessCsv() {
       Print("Impossibile aprire il file CSV: ", CSV_FILENAME);
       return;
    }
-   
-   // Leggiamo riga per riga
+
+   // Carichiamo tutte le righe non vuote in memoria: serve conoscere il
+   // totale PRIMA di processare, per rilevare un file ricreato/ruotato.
+   string lines[];
+   int total = 0;
    while(!FileIsEnding(fileHandle))
    {
       string line = FileReadString(fileHandle);
-      // Evitiamo righe vuote
       if(StringLen(line) < 2)
-         continue;
-      
-      // Parsiamo la riga
-      SignalInfo info;
-      if(!ParseCsvLine(line, info))
-         continue; // skip riga mal formattata
-      
-      // Confrontiamo il timestamp
-      datetime dt = ConvertToDateTime(info.timestamp);
-      if(dt == 0)
-         continue; // formattazione timestamp errata
-      
-      // Se il timestamp è maggiore dell'ultimo processato, gestiamo il segnale
-      if(dt > g_lastProcessed) {
-         HandleSignal(info);
-         g_lastProcessed = dt;
-      }
+         continue; // evitiamo righe vuote
+      ArrayResize(lines, total + 1);
+      lines[total] = line;
+      total++;
    }
    FileClose(fileHandle);
+
+   if(total == 0)
+      return;
+
+   // lines[0] è l'header: le righe di segnale sono total-1
+   int signalCount = total - 1;
+
+   // File con meno righe dello stato salvato: il CSV è stato ricreato o
+   // ruotato manualmente. Ripartiamo da zero (le righe presenti sono nuove).
+   if(signalCount < g_processedLines) {
+      Print("ATTENZIONE: ", CSV_FILENAME, " ha ", signalCount,
+            " righe ma lo stato indica ", g_processedLines,
+            " già processate: file ricreato/ruotato, riparto da zero.");
+      g_processedLines = 0;
+      SaveProcessedLines(g_processedLines);
+   }
+
+   // Processa solo le righe successive all'ultima già gestita.
+   // Il confronto per posizione (e non per timestamp) evita di perdere
+   // segnali emessi nello stesso secondo.
+   for(int i = 1 + g_processedLines; i < total; i++)
+   {
+      SignalInfo info;
+      bool parsed = ParseCsvLine(lines[i], info) && ConvertToDateTime(info.timestamp) != 0;
+
+      if(!parsed) {
+         // Se è l'ULTIMA riga potrebbe essere una scrittura parziale del
+         // crawler ancora in corso: non avanzare, riprova al prossimo timer.
+         if(i == total - 1)
+            return;
+         Print("Riga malformata saltata: ", lines[i]);
+         g_processedLines = i;
+         SaveProcessedLines(g_processedLines);
+         continue;
+      }
+
+      HandleSignal(info);
+      g_processedLines = i;
+      SaveProcessedLines(g_processedLines);
+   }
 }
 
 
@@ -413,6 +570,8 @@ void ProcessCsv() {
 //+------------------------------------------------------------------+
 int OnInit() {
    Print("EA Crawler_Trading_Signal avviato");
+   g_processedLines = LoadProcessedLines();
+   Print("Stato caricato: ", g_processedLines, " righe già processate");
    EventSetTimer(TIMER_SECONDS);
    return(INIT_SUCCEEDED);
 }
@@ -440,11 +599,11 @@ void OnTimer() {
 void OnTick() {
    // Mostra un messaggio sul grafico che indica che l'EA è attivo
    string status = "EA Crawler Trading Signal Attivo\n";
-   status += "Ultimo segnale processato: ";
-   if(g_lastProcessed > 0)
-      status += TimeToString(g_lastProcessed, TIME_DATE|TIME_MINUTES);
+   status += "Segnali processati: ";
+   if(g_processedLines > 0)
+      status += IntegerToString(g_processedLines);
    else
-      status += "Nessun segnale ancora processato";
+      status += "nessuno";
 
    Comment(status);
 }

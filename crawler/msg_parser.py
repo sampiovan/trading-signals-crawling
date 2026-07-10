@@ -89,7 +89,12 @@ def parse_order_open(text):
 
 		order_id, magic_number = get_order_ticket(asset, entry, signal_type)
 		if not order_id:
-			raise OrderNotFoundException(f"Order ID non trovato per segnale open: asset={asset}, entry={entry}, signal={signal_type}")
+			# Nessun placement precedente nel registro: è un ordine diretto
+			# a mercato. order_id vuoto segnala all'EA di aprire la posizione
+			# (e registrarne il ticket) invece di verificare un pending.
+			logger.info(f"Nessun pending nel registro per open {asset} @ {entry}: ordine diretto a mercato.")
+			order_id = ''
+			magic_number = generate_magic()
 		return {
 			'order_id': order_id,
 			'magic_number': magic_number,
