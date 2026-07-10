@@ -28,8 +28,15 @@ sinput int      TIMER_SECONDS  = 10;                    // ogni quanti secondi c
 //----- Nome del file per il registro degli ordini
 #define ORDER_REGISTRY_FILENAME "order_registry.csv"
 
+//----- Nome del file di stato (righe del CSV già processate)
+#define STATE_FILENAME "crawler_ea_state.txt"
+
 //----- Variabili globali / statiche ---------------------------------
-datetime g_lastProcessed = 0; // memorizza l'ultima data/ora processata con successo
+// Numero di righe di segnale (header esclusa) già processate.
+// Persistito su STATE_FILENAME per sopravvivere ai riavvii dell'EA:
+// senza persistenza, a ogni riavvio il CSV verrebbe rieseguito
+// dall'inizio, duplicando tutti gli ordini.
+int g_processedLines = 0;
 
 // Definizione della struttura dei segnali
 struct SignalInfo {
@@ -370,6 +377,32 @@ void HandleSignal(const SignalInfo &info) {
 
 
 //------------------------------------------------------------------
+// Persistenza dello stato: numero di righe di segnale già processate
+//------------------------------------------------------------------
+int LoadProcessedLines() {
+   int handle = FileOpen(STATE_FILENAME, FILE_READ|FILE_TXT|FILE_ANSI);
+   if(handle < 0)
+      return 0; // primo avvio: nessuno stato salvato
+   string content = FileReadString(handle);
+   FileClose(handle);
+   int value = StrToInteger(MyStringTrim(content));
+   if(value < 0)
+      value = 0;
+   return value;
+}
+
+void SaveProcessedLines(int count) {
+   int handle = FileOpen(STATE_FILENAME, FILE_WRITE|FILE_TXT|FILE_ANSI);
+   if(handle < 0) {
+      Print("Errore nel salvare lo stato su ", STATE_FILENAME, ": ", GetLastError());
+      return;
+   }
+   FileWriteString(handle, IntegerToString(count));
+   FileClose(handle);
+}
+
+
+//------------------------------------------------------------------
 // Funzione per leggere il CSV e processare i segnali
 //------------------------------------------------------------------
 void ProcessCsv() {
@@ -380,32 +413,61 @@ void ProcessCsv() {
       Print("Impossibile aprire il file CSV: ", CSV_FILENAME);
       return;
    }
-   
-   // Leggiamo riga per riga
+
+   // Carichiamo tutte le righe non vuote in memoria: serve conoscere il
+   // totale PRIMA di processare, per rilevare un file ricreato/ruotato.
+   string lines[];
+   int total = 0;
    while(!FileIsEnding(fileHandle))
    {
       string line = FileReadString(fileHandle);
-      // Evitiamo righe vuote
       if(StringLen(line) < 2)
-         continue;
-      
-      // Parsiamo la riga
-      SignalInfo info;
-      if(!ParseCsvLine(line, info))
-         continue; // skip riga mal formattata
-      
-      // Confrontiamo il timestamp
-      datetime dt = ConvertToDateTime(info.timestamp);
-      if(dt == 0)
-         continue; // formattazione timestamp errata
-      
-      // Se il timestamp è maggiore dell'ultimo processato, gestiamo il segnale
-      if(dt > g_lastProcessed) {
-         HandleSignal(info);
-         g_lastProcessed = dt;
-      }
+         continue; // evitiamo righe vuote
+      ArrayResize(lines, total + 1);
+      lines[total] = line;
+      total++;
    }
    FileClose(fileHandle);
+
+   if(total == 0)
+      return;
+
+   // lines[0] è l'header: le righe di segnale sono total-1
+   int signalCount = total - 1;
+
+   // File con meno righe dello stato salvato: il CSV è stato ricreato o
+   // ruotato manualmente. Ripartiamo da zero (le righe presenti sono nuove).
+   if(signalCount < g_processedLines) {
+      Print("ATTENZIONE: ", CSV_FILENAME, " ha ", signalCount,
+            " righe ma lo stato indica ", g_processedLines,
+            " già processate: file ricreato/ruotato, riparto da zero.");
+      g_processedLines = 0;
+      SaveProcessedLines(g_processedLines);
+   }
+
+   // Processa solo le righe successive all'ultima già gestita.
+   // Il confronto per posizione (e non per timestamp) evita di perdere
+   // segnali emessi nello stesso secondo.
+   for(int i = 1 + g_processedLines; i < total; i++)
+   {
+      SignalInfo info;
+      bool parsed = ParseCsvLine(lines[i], info) && ConvertToDateTime(info.timestamp) != 0;
+
+      if(!parsed) {
+         // Se è l'ULTIMA riga potrebbe essere una scrittura parziale del
+         // crawler ancora in corso: non avanzare, riprova al prossimo timer.
+         if(i == total - 1)
+            return;
+         Print("Riga malformata saltata: ", lines[i]);
+         g_processedLines = i;
+         SaveProcessedLines(g_processedLines);
+         continue;
+      }
+
+      HandleSignal(info);
+      g_processedLines = i;
+      SaveProcessedLines(g_processedLines);
+   }
 }
 
 
@@ -414,6 +476,8 @@ void ProcessCsv() {
 //+------------------------------------------------------------------+
 int OnInit() {
    Print("EA Crawler_Trading_Signal avviato");
+   g_processedLines = LoadProcessedLines();
+   Print("Stato caricato: ", g_processedLines, " righe già processate");
    EventSetTimer(TIMER_SECONDS);
    return(INIT_SUCCEEDED);
 }
@@ -441,11 +505,11 @@ void OnTimer() {
 void OnTick() {
    // Mostra un messaggio sul grafico che indica che l'EA è attivo
    string status = "EA Crawler Trading Signal Attivo\n";
-   status += "Ultimo segnale processato: ";
-   if(g_lastProcessed > 0)
-      status += TimeToString(g_lastProcessed, TIME_DATE|TIME_MINUTES);
+   status += "Segnali processati: ";
+   if(g_processedLines > 0)
+      status += IntegerToString(g_processedLines);
    else
-      status += "Nessun segnale ancora processato";
+      status += "nessuno";
 
    Comment(status);
 }
