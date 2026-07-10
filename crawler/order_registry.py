@@ -1,7 +1,10 @@
 import os
 import csv
+import logging
 
 from config import load_config
+
+logger = logging.getLogger(__name__)
 
 
 # Variabile globale per il registro degli ordini (indicizzato per "magic")
@@ -28,7 +31,7 @@ def load_order_registry():
     registry_path = get_registry_path()
 
     if not os.path.exists(registry_path):
-        print("File order_registry.csv non trovato in:", registry_path)
+        logger.warning(f"File order_registry.csv non trovato in: {registry_path}")
         ORDER_REGISTRY = registry
         return registry
     try:
@@ -38,8 +41,8 @@ def load_order_registry():
                 magic = row.get('magic', '').strip()
                 if magic:
                     registry[magic] = row
-    except Exception as e:
-        print("Errore nel caricare order_registry.csv:", e)
+    except Exception:
+        logger.exception("Errore nel caricare order_registry.csv")
 
     ORDER_REGISTRY = registry
     return registry
@@ -54,7 +57,6 @@ def get_order_ticket(asset, entry, signal_type, tol=0.0002):
     global ORDER_REGISTRY
 
     target_asset = asset.strip().upper()
-    target_signal = signal_type.strip().upper()
 
     try:
         target_entry = float(entry)
@@ -63,7 +65,6 @@ def get_order_ticket(asset, entry, signal_type, tol=0.0002):
 
     for magic, record in ORDER_REGISTRY.items():
         record_asset = record.get('asset', '').strip().upper()
-        record_signal = record.get('signal_type', '').strip().upper()
 
         try:
             record_entry = float(record.get('entry', 0))
@@ -74,6 +75,6 @@ def get_order_ticket(asset, entry, signal_type, tol=0.0002):
         if record_asset == target_asset and abs(record_entry - target_entry) < tol:#and record_signal == target_signal:
             order_id = record.get('ticket', '')
             magic_number = record.get('magic', '')
-            print(f"Trovato ordine: asset {target_asset}, entry {target_entry}, ticket {order_id}, magic {magic_number}")
+            logger.info(f"Trovato ordine: asset {target_asset}, entry {target_entry}, ticket {order_id}, magic {magic_number}")
             return order_id, magic_number
     return None, None

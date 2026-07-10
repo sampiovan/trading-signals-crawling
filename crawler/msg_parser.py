@@ -1,7 +1,10 @@
 import re
+import logging
 
-from order_registry import ORDER_REGISTRY, load_order_registry, get_order_ticket
+from order_registry import load_order_registry, get_order_ticket
 from utils import generate_magic
+
+logger = logging.getLogger(__name__)
 
 
 # Definiamo una eccezione personalizzata
@@ -9,15 +12,14 @@ class OrderNotFoundException(Exception):
 	pass
 
 
-"""
-Funzione principale che prova a riconoscere il tipo di messaggio
-chiamando in sequenza le funzioni dedicate. Prima di ogni parsing,
-viene aggiornato il registro globale degli ordini.
-"""
 def parse_message(message_text):
-	global ORDER_REGISTRY
-	load_order_registry()	# Aggiorna il registro globale
-	print("Registro caricato:", ORDER_REGISTRY)
+	"""
+	Funzione principale che prova a riconoscere il tipo di messaggio
+	chiamando in sequenza le funzioni dedicate. Prima di ogni parsing,
+	viene aggiornato il registro globale degli ordini.
+	"""
+	registry = load_order_registry()	# Aggiorna il registro globale
+	logger.debug(f"Registro caricato: {registry}")
 
 	parsers = [
 		parse_order_placement,
@@ -26,7 +28,7 @@ def parse_message(message_text):
 		parse_order_close,
 		parse_order_cancel
 	]
-	
+
 	for parser in parsers:
 		result = parser(message_text)
 		if result:
@@ -34,17 +36,17 @@ def parse_message(message_text):
 	return None
 
 
-"""
-Riconosce un messaggio di piazzamento ordine.
-Esempio:
-	"📈BUY LIMIT  EUR/USD
-	 Prezzo 1.12500  (di apertura)
-	 
-	 Stop Loss   🔴 1.08500
-	 
-	 Take Profit  🟢  1.20000"
-"""
 def parse_order_placement(text):
+	"""
+	Riconosce un messaggio di piazzamento ordine.
+	Esempio:
+		"📈BUY LIMIT  EUR/USD
+		 Prezzo 1.12500  (di apertura)
+
+		 Stop Loss   🔴 1.08500
+
+		 Take Profit  🟢  1.20000"
+	"""
 	pattern = re.compile(
 		r"(?i)^(?:\S+\s*)?(BUY LIMIT|SELL LIMIT|BUY STOP|SELL STOP|BUY|SELL)\s+([A-Z]{3}/[A-Z]{3}).*?Prezzo\s+([\d\.]+).*?(?:di\s+apertura).*?Stop Loss\s*[^\d]*([\d\.]+).*?Take Profit\s*[^\d]*([\d\.]+)",
 		re.DOTALL
@@ -66,13 +68,13 @@ def parse_order_placement(text):
 	return None
 
 
-"""
-Riconosce un messaggio di apertura ordine.
-Esempio:
-	"Ordine Buy  EUR/USD    Aperto 
-	Prezzo di ingresso  1.12500"
-"""
 def parse_order_open(text):
+	"""
+	Riconosce un messaggio di apertura ordine.
+	Esempio:
+		"Ordine Buy  EUR/USD    Aperto
+		Prezzo di ingresso  1.12500"
+	"""
 	pattern = re.compile(
 		r"(?i)Ordine\s+(BUY|SELL)\s+([A-Z]{3}/[A-Z]{3}).*?Aperto.*?Prezzo di ingresso\s+([\d\.]+)",
 		re.DOTALL
@@ -84,7 +86,7 @@ def parse_order_open(text):
 		signal_type = match.group(1).upper()
 		asset = match.group(2).upper().replace("/", "")
 		entry = match.group(3)
-		
+
 		order_id, magic_number = get_order_ticket(asset, entry, signal_type)
 		if not order_id:
 			raise OrderNotFoundException(f"Order ID non trovato per segnale open: asset={asset}, entry={entry}, signal={signal_type}")
@@ -102,12 +104,12 @@ def parse_order_open(text):
 	return None
 
 
-"""
-Riconosce un messaggio di modifica ordine.
-Esempio:
-	"(BUY LIMIT EUR/USD) - MODIFICARE IL PREZZO DI INGRESSO DA 1.12500 A  1.13000  mantenendo uguale Stop loss e Take Profit 👍✅"
-"""
 def parse_order_modify(text):
+	"""
+	Riconosce un messaggio di modifica ordine.
+	Esempio:
+		"(BUY LIMIT EUR/USD) - MODIFICARE IL PREZZO DI INGRESSO DA 1.12500 A  1.13000  mantenendo uguale Stop loss e Take Profit 👍✅"
+	"""
 	pattern = re.compile(
 		r"(?i)\((BUY LIMIT|SELL LIMIT|BUY STOP|SELL STOP)\s+([A-Z]{3}/[A-Z]{3})\).*?MODIFICARE IL PREZZO DI INGRESSO DA\s+([\d\.]+)\s+A\s+([\d\.]+)",
 		re.DOTALL
@@ -139,14 +141,14 @@ def parse_order_modify(text):
 	return None
 
 
-"""
-Riconosce un messaggio di chiusura ordine.
-Esempio:
-	"📊EUR/USD
-
-	CHIUDERE MANUALMENTE UNA POSIZIONE IN PROFITTO SU EUR/USD  (1.12500)  ✅✅✅"
-"""
 def parse_order_close(text):
+	"""
+	Riconosce un messaggio di chiusura ordine.
+	Esempio:
+		"📊EUR/USD
+
+		CHIUDERE MANUALMENTE UNA POSIZIONE IN PROFITTO SU EUR/USD  (1.12500)  ✅✅✅"
+	"""
 	pattern = re.compile(
 		r"(?i)[\s\S]*([A-Z]{3}/[A-Z]{3}).*?CHIUDERE.*?\(([\d\.]+)\)",
 		re.DOTALL
@@ -177,12 +179,12 @@ def parse_order_close(text):
 	return None
 
 
-"""
-Riconosce un messaggio di annullamento ordine.
-Esempio:
-	"ANNULLARE BUY LIMIT EUR/USD ... (1.12500)✅"
-"""
 def parse_order_cancel(text):
+	"""
+	Riconosce un messaggio di annullamento ordine.
+	Esempio:
+		"ANNULLARE BUY LIMIT EUR/USD ... (1.12500)✅"
+	"""
 	pattern = re.compile(
 		r"(?i)ANNULLARE\s+(BUY LIMIT|SELL LIMIT|BUY STOP|SELL STOP)\s+([A-Z]{3}/[A-Z]{3}).*?\(([\d\.]+)",
 		re.DOTALL
