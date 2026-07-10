@@ -164,11 +164,17 @@ def test_parse_message_recognizes_each_type(monkeypatch):
     monkeypatch.setattr(msg_parser, 'load_order_registry', lambda: {})
     monkeypatch.setattr(msg_parser, 'get_order_ticket', lambda *a: ('777', '88888'))
 
-    assert parse_message(MSG_PLACEMENT)['message_type'] == 'placement'
-    assert parse_message(MSG_OPEN)['message_type'] == 'open'
-    assert parse_message(MSG_MODIFY)['message_type'] == 'modify'
-    assert parse_message(MSG_CLOSE)['message_type'] == 'close'
-    assert parse_message(MSG_CANCEL)['message_type'] == 'cancel'
+    # parse_message restituisce sempre una lista di segnali
+    for msg, expected_type in [
+        (MSG_PLACEMENT, 'placement'),
+        (MSG_OPEN, 'open'),
+        (MSG_MODIFY, 'modify'),
+        (MSG_CLOSE, 'close'),
+        (MSG_CANCEL, 'cancel'),
+    ]:
+        signals = parse_message(msg)
+        assert isinstance(signals, list) and len(signals) == 1
+        assert signals[0]['message_type'] == expected_type
 
 
 def test_parse_message_returns_none_for_non_signal(monkeypatch):

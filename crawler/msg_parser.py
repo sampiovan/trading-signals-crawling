@@ -12,15 +12,27 @@ class OrderNotFoundException(Exception):
 	pass
 
 
-def parse_message(message_text):
+def parse_message(message_text, reply_text=None):
 	"""
 	Funzione principale che prova a riconoscere il tipo di messaggio
 	chiamando in sequenza le funzioni dedicate. Prima di ogni parsing,
 	viene aggiornato il registro globale degli ordini.
+
+	reply_text è il testo del messaggio Telegram citato (se il messaggio
+	è una risposta): alcuni parser lo usano per risalire all'ordine.
+
+	Restituisce:
+	- None se il messaggio non è riconosciuto;
+	- []   se è riconosciuto ma non richiede azioni (es. notifiche);
+	- una lista di segnali altrimenti (un messaggio può produrne più
+	  di uno, es. chiusura di più posizioni).
 	"""
 	registry = load_order_registry()	# Aggiorna il registro globale
 	logger.debug(f"Registro caricato: {registry}")
 
+	# I parser che usano il reply ricevono anche reply_text.
+	# L'ordine conta: i pattern più specifici devono precedere quelli
+	# più generici (es. multi-close prima della chiusura singola).
 	parsers = [
 		parse_order_placement,
 		parse_order_open,
@@ -31,8 +43,13 @@ def parse_message(message_text):
 
 	for parser in parsers:
 		result = parser(message_text)
-		if result:
-			return result
+		if result is None:
+			continue
+		# Normalizza al contratto a lista: i parser storici
+		# restituiscono un singolo dict, i nuovi una lista.
+		if isinstance(result, dict):
+			return [result]
+		return result
 	return None
 
 
