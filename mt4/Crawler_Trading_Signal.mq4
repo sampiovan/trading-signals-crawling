@@ -182,6 +182,15 @@ void LogOrderTicket(int ticket, const SignalInfo &info) {
 // Funzioni per l'esecuzione degli ordini
 //------------------------------------------------------------------
 
+// Prezzo corrente per un ordine a mercato: Ask per BUY, Bid per SELL.
+// OrderSend con price=0.0 viene rifiutato dal broker (err. 129 invalid price).
+double MarketOrderPrice(string symbol, int cmd) {
+   RefreshRates();
+   if(cmd == OP_BUY)
+      return MarketInfo(symbol, MODE_ASK);
+   return MarketInfo(symbol, MODE_BID);
+}
+
 // Esempio: piazzamento di un ordine "placement"
 void DoPlacement(const SignalInfo &info) {
    // Distinzione tra BUY LIMIT, SELL LIMIT, BUY STOP, SELL STOP, BUY, SELL
@@ -201,9 +210,9 @@ void DoPlacement(const SignalInfo &info) {
 
    // Per ordini pendenti (BUY LIMIT, SELL LIMIT, BUY STOP, SELL STOP) serve 'price'.
    double price = info.entry;
-   // Per ordini a mercato (BUY/SELL) 'price' si ignora e si mette 0.0
+   // Per ordini a mercato (BUY/SELL) serve il prezzo corrente (Ask/Bid)
    if(cmd==OP_BUY || cmd==OP_SELL)
-      price = 0.0;
+      price = MarketOrderPrice(info.asset, cmd);
 
    int ticket = OrderSend(
       info.asset,   // Symbol
@@ -226,10 +235,31 @@ void DoPlacement(const SignalInfo &info) {
    }
 }
 
-// Esempio: "open" => potremmo trattarlo come un ordine a mercato
+// Gestione del messaggio "open":
+// - order_id presente: il pending era già stato piazzato e il broker lo
+//   triggera da solo. NON apriamo nulla (aprire qui duplicherebbe la
+//   posizione): verifichiamo solo che sia diventato posizione e logghiamo.
+// - order_id vuoto: ordine diretto a mercato, senza placement precedente.
+//   Apriamo a mercato e registriamo il ticket nel registro.
 void DoOpen(const SignalInfo &info) {
-   // Se info.signal_type == "BUY" => OP_BUY
-   // Se info.signal_type == "SELL" => OP_SELL
+   // --- Caso 1: ordine noto dal registro -> solo verifica e log
+   if(StringLen(info.order_id) > 0) {
+      int knownTicket = StrToInteger(info.order_id);
+      if(!OrderSelect(knownTicket, SELECT_BY_TICKET, MODE_TRADES)) {
+         Print("DoOpen: ordine ", info.order_id,
+               " non trovato tra i trade attivi (chiuso o cancellato?): ", GetLastError());
+         return;
+      }
+      int orderType = OrderType();
+      if(orderType == OP_BUY || orderType == OP_SELL)
+         Print("DoOpen: confermato, il pending ", info.order_id, " è ora una posizione aperta.");
+      else
+         Print("DoOpen: ATTENZIONE, l'ordine ", info.order_id,
+               " risulta ancora pendente nonostante il segnale di apertura.");
+      return;
+   }
+
+   // --- Caso 2: ordine diretto a mercato (nessun placement precedente)
    int cmd = -1;
    string st = MyStringUpper(info.signal_type);
    if(st=="BUY")  cmd = OP_BUY;
@@ -244,17 +274,21 @@ void DoOpen(const SignalInfo &info) {
       info.asset,
       cmd,
       LOT_SIZE,
-      0.0,         // a mercato
+      MarketOrderPrice(info.asset, cmd),
       3,
       info.sl,
       info.tp,
-      "EA CSV Trader - Open",
-      0,0,clrBlue
+      "Open",
+      StrToInteger(info.magic_number),
+      0,
+      clrBlue
    );
    if(ticket<0)
       Print("Errore OrderSend open: ", GetLastError());
-   else
-      Print("Ordine APERTO, ticket=", ticket);
+   else {
+      Print("Ordine diretto a mercato aperto, ticket=", ticket);
+      LogOrderTicket(ticket, info); // senza registrazione il ticket andrebbe perso
+   }
 }
 
 
