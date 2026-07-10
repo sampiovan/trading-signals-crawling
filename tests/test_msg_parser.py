@@ -4,9 +4,14 @@ import msg_parser
 from msg_parser import (
     OrderNotFoundException,
     parse_message,
+    parse_market_order,
     parse_order_placement,
     parse_order_open,
     parse_order_modify,
+    parse_move_sl_all,
+    parse_move_sl_breakeven,
+    parse_orders_multi_close,
+    parse_close_notification,
     parse_order_close,
     parse_order_cancel,
 )
@@ -40,6 +45,36 @@ MSG_CLOSE = (
 )
 
 MSG_CANCEL = "ANNULLARE BUY LIMIT EUR/USD non più valido (1.12500)✅"
+
+MSG_MULTI_CLOSE_2 = (
+    "📊AUD/NZD \n"
+    "\n"
+    "CHIUDERE MANUALMENTE DUE POSIZIONI DI CUI:\n"
+    "\n"
+    "UNA IN PROFITTO su           AUD/NZD   (1.21600) \n"
+    "\n"
+    "UNA IN PROFITTO su          AUD/NZD  (1.21403) \n"
+    "\n"
+    "\n"
+    "TOTALE IN PROFITTO✅✅✅"
+)
+
+MSG_MULTI_CLOSE_4 = (
+    "📊EUR/USD   -  AUD/NZD\n"
+    "\n"
+    "CHIUDERE MANUALMENTE QUATTRO POSIZIONI DI CUI:\n"
+    "\n"
+    "UNA IN PROFITTO su          EUR/USD   (1.14700) \n"
+    "\n"
+    "UNA IN PROFITTO su          AUD/NZD  (1.21700)\n"
+    "\n"
+    "una in perdita su                 AUD/NZD  (1.21300)\n"
+    "\n"
+    "una in perdita su                 AUD/NZD  (1.20961)\n"
+    "\n"
+    "\n"
+    "TOTALE IN PARI O DI POCO IN PROFITTO✅"
+)
 
 MSG_NOT_A_SIGNAL = "Buongiorno a tutti! Oggi mercati laterali, restiamo flat."
 
@@ -158,17 +193,270 @@ def test_cancel_parsed(monkeypatch):
     assert result['order_id'] == '555'
 
 
+# ----- parse_orders_multi_close -----
+
+def test_multi_close_two_positions(monkeypatch):
+    lookups = []
+
+    def fake_lookup(asset, entry, signal_type):
+        lookups.append((asset, entry))
+        return f"t{len(lookups)}", f"m{len(lookups)}"
+
+    monkeypatch.setattr(msg_parser, 'get_order_ticket', fake_lookup)
+    signals = parse_orders_multi_close(MSG_MULTI_CLOSE_2)
+
+    assert lookups == [('AUDNZD', '1.21600'), ('AUDNZD', '1.21403')]
+    assert len(signals) == 2
+    assert all(s['message_type'] == 'close' for s in signals)
+    assert [s['order_id'] for s in signals] == ['t1', 't2']
+
+
+def test_multi_close_four_positions_multi_asset(monkeypatch):
+    lookups = []
+
+    def fake_lookup(asset, entry, signal_type):
+        lookups.append((asset, entry))
+        return f"t{len(lookups)}", f"m{len(lookups)}"
+
+    monkeypatch.setattr(msg_parser, 'get_order_ticket', fake_lookup)
+    signals = parse_orders_multi_close(MSG_MULTI_CLOSE_4)
+
+    # Tutte e 4 le posizioni, con l'asset giusto (anche "una in perdita" minuscolo)
+    assert lookups == [
+        ('EURUSD', '1.14700'),
+        ('AUDNZD', '1.21700'),
+        ('AUDNZD', '1.21300'),
+        ('AUDNZD', '1.20961'),
+    ]
+    assert len(signals) == 4
+
+
+def test_multi_close_partial_lookup_failure(monkeypatch):
+    def fake_lookup(asset, entry, signal_type):
+        # Solo la seconda posizione è nel registro
+        if entry == '1.21403':
+            return '222', '22222'
+        return None, None
+
+    monkeypatch.setattr(msg_parser, 'get_order_ticket', fake_lookup)
+    signals = parse_orders_multi_close(MSG_MULTI_CLOSE_2)
+
+    # Successo parziale: la posizione mancante è saltata, l'altra chiusa
+    assert len(signals) == 1
+    assert signals[0]['order_id'] == '222'
+
+
+def test_multi_close_all_lookups_fail(monkeypatch):
+    monkeypatch.setattr(msg_parser, 'get_order_ticket', lambda *a: (None, None))
+    with pytest.raises(OrderNotFoundException):
+        parse_orders_multi_close(MSG_MULTI_CLOSE_2)
+
+
+def test_multi_close_not_captured_by_single_close(monkeypatch):
+    # Prima del fix il parser single-close catturava il messaggio multi
+    # chiudendo UNA sola posizione: il dispatcher deve produrre N segnali
+    monkeypatch.setattr(msg_parser, 'load_order_registry', lambda: {})
+    monkeypatch.setattr(msg_parser, 'get_order_ticket', lambda *a: ('9', '99999'))
+
+    signals = parse_message(MSG_MULTI_CLOSE_4)
+    assert len(signals) == 4
+
+
+def test_single_close_still_works_via_dispatcher(monkeypatch):
+    monkeypatch.setattr(msg_parser, 'load_order_registry', lambda: {})
+    monkeypatch.setattr(msg_parser, 'get_order_ticket', lambda *a: ('9', '99999'))
+
+    signals = parse_message(MSG_CLOSE)
+    assert len(signals) == 1
+    assert signals[0]['message_type'] == 'close'
+
+
+# ----- parse_market_order -----
+
+MSG_MARKET_SELL = (
+    "📊GBP/USD \n"
+    "\n"
+    "ATTENZIONE QUESTA E' UNA OPERAZIONE IN SELL DIRETTA A MERCATO:\n"
+    "\n"
+    "1) Piazzare un SELL su GBP/USD  ADESSO AL PREZZO ATTUALE:\n"
+    "\n"
+    "📉SELL  GBP/USD \n"
+    "Prezzo 1.34121  (nostro prezzo di apertura)\n"
+    "\n"
+    "Stop Loss   🔴 1.36100\n"
+    "\n"
+    "Take Profit  🟢 1.30000\n"
+    "\n"
+    "\n"
+    "⚠️Attenzione: questo ordine viene messo a Mercato al prezzo attuale del cambio in questione. \n"
+    "\n"
+    "Per eseguirlo bisogna selezionare in alto “esecuzione a mercato “ (al posto del classico "
+    "buy limit/sell limit) ed impostare i valori di stop loss e take profit indicato. "
+    "Poi premere buy/sell by market come indicato nell’ordine"
+)
+
+
+def test_market_order_parsed():
+    result = parse_market_order(MSG_MARKET_SELL)
+    assert result is not None
+    assert result['message_type'] == 'placement'
+    assert result['signal_type'] == 'SELL'   # tipo a mercato, non pendente
+    assert result['asset'] == 'GBPUSD'
+    assert result['entry'] == '1.34121'
+    assert result['sl'] == '1.36100'
+    assert result['tp'] == '1.30000'
+    assert result['order_id'] == ''
+    assert result['magic_number'].isdigit() and len(result['magic_number']) == 5
+
+
+def test_market_order_not_matched_by_placement_parser():
+    # Il parser placement (ancorato a inizio messaggio) non deve catturarlo
+    assert parse_order_placement(MSG_MARKET_SELL) is None
+
+
+def test_market_order_ignores_pending_placement():
+    assert parse_market_order(MSG_PLACEMENT) is None
+    assert parse_market_order(MSG_NOT_A_SIGNAL) is None
+
+
+def test_market_order_via_dispatcher(monkeypatch):
+    monkeypatch.setattr(msg_parser, 'load_order_registry', lambda: {})
+    signals = parse_message(MSG_MARKET_SELL)
+    assert len(signals) == 1
+    assert signals[0]['message_type'] == 'placement'
+    assert signals[0]['signal_type'] == 'SELL'
+
+
+# ----- parse_move_sl_all / parse_move_sl_breakeven -----
+
+MSG_MOVE_SL_ALL = (
+    "📊EUR/USD\n"
+    "\n"
+    "MODIFICARE IL VALORE DI STOP LOSS SU TUTTE LE OPERAZIONI IN CORSO SU EUR/USD a  0.90000\n"
+    "\n"
+    "🔸ATTENZIONE VISTO CHE OGGI É VENERDÍ E CI APPRESTIAMO ALLA CHIUSURA DEI MERCATI VALUTARI, "
+    "PREFERIAMO SPOSTARE IL VALORE DELLO STOP LOSS, PER SICUREZZA. GRAZIE💪"
+)
+
+MSG_MOVE_SL_BREAKEVEN = (
+    "GBP/USD Move Stop Loss to Breakeven o comunque in posizione di profitto a  1.33890✅\n"
+    "\n"
+    "Per i meno esperti ciò significa Spostare lo stop Loss appena sotto al punto di apertura "
+    "così l'operazione è a rischio zero 👍 \n"
+    "Al momento ci sono circa 25 Pips in profitto📉"
+)
+
+MSG_OPEN_GBP = (
+    "Ordine Sell  GBP/USD    Aperto \n"
+    "Prezzo di ingresso  1.34121"
+)
+
+
+def test_move_sl_all_positions():
+    result = parse_move_sl_all(MSG_MOVE_SL_ALL)
+    assert result['message_type'] == 'move_sl'
+    assert result['asset'] == 'EURUSD'
+    assert result['sl'] == '0.90000'
+    assert result['order_id'] == ''
+
+
+def test_move_sl_breakeven_without_reply_targets_all(monkeypatch):
+    monkeypatch.setattr(msg_parser, 'get_order_ticket', lambda *a: (None, None))
+    result = parse_move_sl_breakeven(MSG_MOVE_SL_BREAKEVEN)
+
+    assert result['message_type'] == 'move_sl'
+    assert result['asset'] == 'GBPUSD'
+    assert result['sl'] == '1.33890'
+
+
+def test_move_sl_breakeven_with_reply_targets_single_order(monkeypatch):
+    lookups = []
+
+    def fake_lookup(asset, entry, signal_type):
+        lookups.append((asset, entry))
+        return '424242', '31337'
+
+    monkeypatch.setattr(msg_parser, 'get_order_ticket', fake_lookup)
+    result = parse_move_sl_breakeven(MSG_MOVE_SL_BREAKEVEN, reply_text=MSG_OPEN_GBP)
+
+    # Il reply (messaggio di apertura) identifica l'ordine esatto
+    assert ('GBPUSD', '1.34121') in lookups
+    assert result['message_type'] == 'modify'
+    assert result['order_id'] == '424242'
+    assert result['sl'] == '1.33890'
+    assert result['entry'] == 0  # prezzo invariato
+
+
+def test_move_sl_breakeven_reply_asset_mismatch_falls_back(monkeypatch):
+    monkeypatch.setattr(msg_parser, 'get_order_ticket', lambda *a: ('1', '2'))
+    reply_other_asset = "Ordine Buy  EUR/USD    Aperto \nPrezzo di ingresso  1.12500"
+    result = parse_move_sl_breakeven(MSG_MOVE_SL_BREAKEVEN, reply_text=reply_other_asset)
+
+    # Reply su asset diverso: fallback a tutte le posizioni sull'asset del messaggio
+    assert result['message_type'] == 'move_sl'
+    assert result['asset'] == 'GBPUSD'
+
+
+def test_move_sl_via_dispatcher(monkeypatch):
+    monkeypatch.setattr(msg_parser, 'load_order_registry', lambda: {})
+    monkeypatch.setattr(msg_parser, 'get_order_ticket', lambda *a: (None, None))
+
+    signals = parse_message(MSG_MOVE_SL_ALL)
+    assert len(signals) == 1 and signals[0]['message_type'] == 'move_sl'
+
+    signals = parse_message(MSG_MOVE_SL_BREAKEVEN)
+    assert len(signals) == 1 and signals[0]['message_type'] == 'move_sl'
+
+
+# ----- parse_close_notification -----
+
+MSG_CLOSED_BREAKEVEN = "CHIUSA A BREAKEVEN  GBP/USD A  (1.35290)✅"
+
+MSG_CLOSED_STOP = (
+    "CHIUSURA IN STOP (4.704.50)\n"
+    "\n"
+    "🔹 Operazione che si è chiusa automaticamente questa notte."
+)
+
+
+def test_close_notifications_recognized_without_action():
+    # Riconosciute ([]), nessun segnale: la chiusura è già avvenuta al broker
+    assert parse_close_notification(MSG_CLOSED_BREAKEVEN) == []
+    assert parse_close_notification(MSG_CLOSED_STOP) == []
+
+
+def test_close_notification_ignores_actionable_closes():
+    # I messaggi di chiusura DA ESEGUIRE non sono notifiche
+    assert parse_close_notification(MSG_CLOSE) is None
+    assert parse_close_notification(MSG_MULTI_CLOSE_2) is None
+    assert parse_close_notification(MSG_NOT_A_SIGNAL) is None
+
+
+def test_close_notification_via_dispatcher(monkeypatch):
+    monkeypatch.setattr(msg_parser, 'load_order_registry', lambda: {})
+
+    # [] = riconosciuto ma senza azioni (diverso da None = non riconosciuto)
+    assert parse_message(MSG_CLOSED_BREAKEVEN) == []
+    assert parse_message(MSG_CLOSED_STOP) == []
+
+
 # ----- parse_message (dispatcher) -----
 
 def test_parse_message_recognizes_each_type(monkeypatch):
     monkeypatch.setattr(msg_parser, 'load_order_registry', lambda: {})
     monkeypatch.setattr(msg_parser, 'get_order_ticket', lambda *a: ('777', '88888'))
 
-    assert parse_message(MSG_PLACEMENT)['message_type'] == 'placement'
-    assert parse_message(MSG_OPEN)['message_type'] == 'open'
-    assert parse_message(MSG_MODIFY)['message_type'] == 'modify'
-    assert parse_message(MSG_CLOSE)['message_type'] == 'close'
-    assert parse_message(MSG_CANCEL)['message_type'] == 'cancel'
+    # parse_message restituisce sempre una lista di segnali
+    for msg, expected_type in [
+        (MSG_PLACEMENT, 'placement'),
+        (MSG_OPEN, 'open'),
+        (MSG_MODIFY, 'modify'),
+        (MSG_CLOSE, 'close'),
+        (MSG_CANCEL, 'cancel'),
+    ]:
+        signals = parse_message(msg)
+        assert isinstance(signals, list) and len(signals) == 1
+        assert signals[0]['message_type'] == expected_type
 
 
 def test_parse_message_returns_none_for_non_signal(monkeypatch):

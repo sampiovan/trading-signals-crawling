@@ -393,7 +393,9 @@ void DoModify(const SignalInfo &info) {
    int orderType = OrderType();
    bool isPending = (orderType == OP_BUYLIMIT || orderType == OP_SELLLIMIT ||
                      orderType == OP_BUYSTOP  || orderType == OP_SELLSTOP);
-   if(isPending)
+   // entry=0 nel segnale significa "prezzo invariato" (es. modifica del solo SL):
+   // vale anche per i pending, altrimenti passeremmo prezzo 0 a OrderModify
+   if(isPending && info.entry > 0)
       newPrice = info.entry;
    else
       newPrice = OrderOpenPrice();  // Per ordini a mercato, il prezzo non è modificabile
@@ -414,6 +416,41 @@ void DoModify(const SignalInfo &info) {
       if(isPending)
          UpdateRegistryEntry(info.magic_number, newPrice);
    }
+}
+
+
+// Applica il nuovo Stop Loss a TUTTE le posizioni a mercato aperte
+// sull'asset del segnale (message_type "move_sl"). Usato quando il
+// segnale non identifica un ticket preciso (es. "MODIFICARE IL VALORE
+// DI STOP LOSS SU TUTTE LE OPERAZIONI IN CORSO SU EUR/USD").
+void DoMoveSl(const SignalInfo &info) {
+   if(info.sl <= 0) {
+      Print("DoMoveSl: valore di SL non valido: ", info.sl);
+      return;
+   }
+
+   int updated = 0;
+   for(int i = OrdersTotal() - 1; i >= 0; i--) {
+      if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
+         continue;
+      if(OrderSymbol() != info.asset)
+         continue;
+      if(OrderType() > OP_SELL)
+         continue; // solo posizioni a mercato, non i pending
+      if(OrderStopLoss() == info.sl)
+         continue; // già impostato: evita l'errore "no changes"
+
+      if(OrderModify(OrderTicket(), OrderOpenPrice(), info.sl, OrderTakeProfit(), 0, clrBlue))
+         updated++;
+      else
+         Print("DoMoveSl: errore OrderModify su ticket ", OrderTicket(), ": ", GetLastError());
+   }
+
+   if(updated == 0)
+      Print("DoMoveSl: ATTENZIONE, nessuna posizione aperta su ", info.asset, " da aggiornare.");
+   else
+      Print("DoMoveSl: SL spostato a ", DoubleToString(info.sl, 5),
+            " su ", updated, " posizioni ", info.asset);
 }
 
 
@@ -486,6 +523,7 @@ void HandleSignal(const SignalInfo &info) {
    if(info.message_type=="placement")  DoPlacement(info);
    else if(info.message_type=="open")  DoOpen(info);
    else if(info.message_type=="modify") DoModify(info);
+   else if(info.message_type=="move_sl") DoMoveSl(info);
    else if(info.message_type=="close")  DoClose(info);
    else if(info.message_type=="cancel") DoCancel(info);
    else Print("Tipo di messaggio non gestito: ", info.message_type);
