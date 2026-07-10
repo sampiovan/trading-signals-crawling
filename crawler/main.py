@@ -4,7 +4,7 @@ from telethon import TelegramClient, events
 
 from config import load_config
 from log_setup import setup_logger
-from msg_parser import parse_message
+from msg_parser import parse_message, OrderNotFoundException
 from signals_csv import initialize_csv, save_signal
 
 logger = setup_logger()
@@ -49,8 +49,17 @@ async def main():
 		message_text = event.raw_text
 		logger.info(f"Nuovo messaggio ricevuto: \n{message_text}\n\n")
 
-		#TODO: aggiungere try/except per gestire eventuali errori
-		parsed = parse_message(message_text)
+		try:
+			parsed = parse_message(message_text)
+		except OrderNotFoundException as e:
+			# Segnale riconosciuto ma ordine non presente nel registro:
+			# logga e resta in ascolto (il messaggio originale è nel log sopra)
+			logger.error(f"Ordine non trovato nel registro, segnale scartato: {e}")
+			return
+		except Exception:
+			logger.exception("Errore inatteso nel parsing del messaggio, segnale scartato.")
+			return
+
 		if parsed:
 			save_signal(csv_fullpath, parsed)
 		else:
