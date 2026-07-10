@@ -24,6 +24,7 @@
 sinput string   CSV_FILENAME   = "trading_signals.csv"; // deve stare in MQL4/Files/
 sinput double   LOT_SIZE       = 0.01;                  // lotto di default
 sinput int      TIMER_SECONDS  = 10;                    // ogni quanti secondi controllare il CSV
+sinput double   SLIPPAGE_PIPS  = 3;                     // slippage massimo in pip (convertito in punti)
 
 //----- Nome del file per il registro degli ordini
 #define ORDER_REGISTRY_FILENAME "order_registry.csv"
@@ -246,6 +247,29 @@ double MarketOrderPrice(string symbol, int cmd) {
    return MarketInfo(symbol, MODE_BID);
 }
 
+// Converte lo slippage da pip a punti in base ai Digits del simbolo:
+// su broker a 5/3 cifre 1 pip = 10 punti, su broker a 4/2 cifre 1 pip = 1 punto.
+int PipsToPoints(string symbol, double pips) {
+   int digits = (int)MarketInfo(symbol, MODE_DIGITS);
+   if(digits == 3 || digits == 5)
+      return (int)(pips * 10);
+   return (int)pips;
+}
+
+// Adegua il lotto ai limiti del simbolo: clampa su MINLOT/MAXLOT e
+// arrotonda (per difetto) al multiplo di LOTSTEP, evitando l'errore 131.
+double NormalizeLots(string symbol, double lots) {
+   double minLot  = MarketInfo(symbol, MODE_MINLOT);
+   double maxLot  = MarketInfo(symbol, MODE_MAXLOT);
+   double lotStep = MarketInfo(symbol, MODE_LOTSTEP);
+
+   if(lotStep > 0)
+      lots = MathFloor(lots / lotStep) * lotStep;
+   if(lots < minLot) lots = minLot;
+   if(lots > maxLot) lots = maxLot;
+   return NormalizeDouble(lots, 2);
+}
+
 // Esempio: piazzamento di un ordine "placement"
 void DoPlacement(const SignalInfo &info) {
    // Distinzione tra BUY LIMIT, SELL LIMIT, BUY STOP, SELL STOP, BUY, SELL
@@ -272,9 +296,9 @@ void DoPlacement(const SignalInfo &info) {
    int ticket = OrderSend(
       info.asset,   // Symbol
       cmd,          // Operation
-      LOT_SIZE,     // Volume
-      price,        // Price (0 se esecuzione a mercato)
-      3,            // Slippage
+      NormalizeLots(info.asset, LOT_SIZE), // Volume adeguato ai limiti del simbolo
+      price,        // Price (Ask/Bid se esecuzione a mercato)
+      PipsToPoints(info.asset, SLIPPAGE_PIPS), // Slippage
       info.sl,      // StopLoss
       info.tp,      // TakeProfit
       "Placement", // Comment
@@ -328,9 +352,9 @@ void DoOpen(const SignalInfo &info) {
    int ticket = OrderSend(
       info.asset,
       cmd,
-      LOT_SIZE,
+      NormalizeLots(info.asset, LOT_SIZE),
       MarketOrderPrice(info.asset, cmd),
-      3,
+      PipsToPoints(info.asset, SLIPPAGE_PIPS),
       info.sl,
       info.tp,
       "Open",
@@ -420,9 +444,7 @@ void DoClose(const SignalInfo &info) {
    else
       price = MarketInfo(info.asset, MODE_ASK);
    
-   // Il parametro "3" in OrderClose() indica lo slippage massimo in punti
-   // accettabile per la chiusura dell'ordine.
-   bool ok = OrderClose(ticket, lots, price, 3, clrBlue);
+   bool ok = OrderClose(ticket, lots, price, PipsToPoints(info.asset, SLIPPAGE_PIPS), clrBlue);
    if(!ok)
       Print("Errore OrderClose per ticket ", info.order_id, ": ", GetLastError());
    else
