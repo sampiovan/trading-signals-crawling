@@ -1,6 +1,6 @@
 import re
 
-from order_registry_manager import ORDER_REGISTRY, load_order_registry, get_order_ticket
+from order_registry import ORDER_REGISTRY, load_order_registry, get_order_ticket
 from utils import generate_magic
 
 
