@@ -1,5 +1,7 @@
 # Trading Signals Crawling
 
+[![CI](https://github.com/sampiovan/trading-signals-crawling/actions/workflows/ci.yml/badge.svg)](https://github.com/sampiovan/trading-signals-crawling/actions/workflows/ci.yml)
+
 Sistema di copy-trading automatico composto da due componenti che comunicano tramite file CSV:
 
 1. **Crawler Python** (`crawler/`) — si connette a un canale Telegram con [Telethon](https://docs.telethon.dev/), riconosce i messaggi contenenti segnali di trading e li scrive in un file CSV nella cartella `Files` di MetaTrader 4.
@@ -30,7 +32,7 @@ Il parser ([msg_parser.py](crawler/msg_parser.py)) riconosce cinque tipi di mess
 | Tipo (`message_type`) | Significato | Esempio di messaggio |
 |---|---|---|
 | `placement` | Piazzamento di un ordine (anche pendente) | `📈BUY LIMIT EUR/USD  Prezzo 1.12500 (di apertura) …` |
-| `open` | Apertura a mercato di un ordine | `Ordine Buy EUR/USD Aperto  Prezzo di ingresso 1.12500` |
+| `open` | Ordine aperto: se deriva da un `placement` noto, l'EA verifica solo che il pending sia diventato posizione; se non c'è un placement nel registro, l'EA apre un ordine diretto a mercato | `Ordine Buy EUR/USD Aperto  Prezzo di ingresso 1.12500` |
 | `modify` | Modifica del prezzo di ingresso | `(BUY LIMIT EUR/USD) - MODIFICARE IL PREZZO DI INGRESSO DA … A …` |
 | `close` | Chiusura manuale di una posizione | `CHIUDERE MANUALMENTE UNA POSIZIONE … (1.12500)` |
 | `cancel` | Annullamento di un ordine pendente | `ANNULLARE BUY LIMIT EUR/USD … (1.12500)` |
@@ -100,8 +102,13 @@ Parametri di input dell'EA:
 | Parametro | Default | Descrizione |
 |---|---|---|
 | `CSV_FILENAME` | `trading_signals.csv` | Nome del CSV dei segnali (in `MQL4/Files/`) |
-| `LOT_SIZE` | `0.01` | Dimensione del lotto per gli ordini |
+| `LOT_SIZE` | `0.01` | Dimensione del lotto (validata contro MINLOT/MAXLOT/LOTSTEP del simbolo) |
 | `TIMER_SECONDS` | `10` | Intervallo di lettura del CSV |
+| `SLIPPAGE_PIPS` | `3` | Slippage massimo in pip, convertito automaticamente in punti in base ai Digits del broker (4 o 5 cifre) |
+
+### File di stato dell'EA
+
+L'EA salva in `MQL4/Files/crawler_ea_state.txt` il numero di righe del CSV già processate, così un riavvio del terminale **non riesegue i segnali storici**. Se il CSV dei segnali viene ricreato o svuotato (es. rotazione manuale per contenerne la crescita), l'EA lo rileva e riparte da zero contando solo le righe nuove. Per riprocessare tutto da capo, eliminare il file di stato.
 
 ## Utilizzo
 
@@ -125,7 +132,17 @@ timestamp, order_id, magic_number, message_type, asset, signal_type, entry, sl, 
 2025-10-01 15:30:20, , 48231, placement, EURUSD, BUY LIMIT, 1.12500, 1.08500, 1.20000,
 ```
 
-**`order_registry.csv`** (scritto dall'EA, letto dal crawler): registra per ogni ordine piazzato `timestamp, asset, signal_type, entry, magic, ticket`.
+**`order_registry.csv`** (scritto dall'EA, letto dal crawler): registra per ogni ordine piazzato `timestamp, asset, signal_type, entry, magic, ticket`. L'EA lo aggiorna anche dopo una modifica del prezzo di ingresso, così le chiusure successive ritrovano l'ordine. Il crawler cerca gli ordini per asset, tipo di segnale e prezzo con una tolleranza di 2 pip (pip-aware: 0.01 per le coppie JPY, 0.0001 per le altre).
+
+## Sviluppo
+
+```bash
+pip install -r requirements-dev.txt
+ruff check .    # lint
+pytest          # test unitari (parser dei messaggi e registro ordini)
+```
+
+I test coprono il riconoscimento dei 5 tipi di messaggio e la logica di lookup nel registro; girano anche in CI (GitHub Actions) su ogni push e pull request. L'Expert Advisor non è compilabile in CI: va compilato manualmente in MetaEditor (F7).
 
 ## Disclaimer
 
