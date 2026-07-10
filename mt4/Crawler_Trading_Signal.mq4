@@ -177,6 +177,61 @@ void LogOrderTicket(int ticket, const SignalInfo &info) {
 }
 
 
+//------------------------------------------------------------------
+// Aggiorna il prezzo d'entrata di una riga del registro (per magic).
+// Necessario dopo una modify: il crawler cerca gli ordini per prezzo,
+// quindi un registro con l'entry vecchia renderebbe introvabile
+// l'ordine ai segnali successivi (close/cancel sul nuovo prezzo).
+//------------------------------------------------------------------
+void UpdateRegistryEntry(string magic, double newEntry) {
+   int handle = FileOpen(ORDER_REGISTRY_FILENAME, FILE_CSV | FILE_READ | FILE_ANSI);
+   if(handle < 0) {
+      Print("UpdateRegistryEntry: impossibile leggere ", ORDER_REGISTRY_FILENAME, ": ", GetLastError());
+      return;
+   }
+
+   string lines[];
+   int total = 0;
+   while(!FileIsEnding(handle)) {
+      string line = FileReadString(handle);
+      if(StringLen(line) < 2)
+         continue;
+      ArrayResize(lines, total + 1);
+      lines[total] = line;
+      total++;
+   }
+   FileClose(handle);
+
+   // Colonne del registro: timestamp,asset,signal_type,entry,magic,ticket
+   bool updated = false;
+   for(int i = 1; i < total; i++) { // lines[0] è l'header
+      string parts[];
+      if(StringSplit(lines[i], ',', parts) < 6)
+         continue;
+      if(MyStringTrim(parts[4]) == magic) {
+         lines[i] = parts[0] + "," + parts[1] + "," + parts[2] + "," +
+                    DoubleToString(newEntry, 5) + "," + parts[4] + "," + parts[5];
+         updated = true;
+      }
+   }
+   if(!updated) {
+      Print("UpdateRegistryEntry: magic ", magic, " non trovato nel registro");
+      return;
+   }
+
+   // Riscrittura completa: qui il troncamento di FILE_WRITE è voluto
+   handle = FileOpen(ORDER_REGISTRY_FILENAME, FILE_CSV | FILE_WRITE | FILE_ANSI);
+   if(handle < 0) {
+      Print("UpdateRegistryEntry: impossibile riscrivere ", ORDER_REGISTRY_FILENAME, ": ", GetLastError());
+      return;
+   }
+   for(int i = 0; i < total; i++)
+      FileWriteString(handle, lines[i] + "\n");
+   FileClose(handle);
+   Print("Registro aggiornato: magic ", magic, ", nuova entry ", DoubleToString(newEntry, 5));
+}
+
+
 
 //------------------------------------------------------------------
 // Funzioni per l'esecuzione degli ordini
@@ -312,9 +367,10 @@ void DoModify(const SignalInfo &info) {
    // - Per ordini a mercato, il prezzo non viene modificato (si usa l'OrderOpenPrice()).
    double newPrice;
    int orderType = OrderType();
-   if(orderType == OP_BUYLIMIT || orderType == OP_SELLLIMIT ||
-      orderType == OP_BUYSTOP  || orderType == OP_SELLSTOP)
-      newPrice = StrToDouble(info.entry);
+   bool isPending = (orderType == OP_BUYLIMIT || orderType == OP_SELLLIMIT ||
+                     orderType == OP_BUYSTOP  || orderType == OP_SELLSTOP);
+   if(isPending)
+      newPrice = info.entry;
    else
       newPrice = OrderOpenPrice();  // Per ordini a mercato, il prezzo non è modificabile
    
@@ -328,8 +384,12 @@ void DoModify(const SignalInfo &info) {
    bool ok = OrderModify(ticket, newPrice, newSL, newTP, expiration, clrBlue);
    if(!ok)
       Print("Errore OrderModify per ticket ", info.order_id, ": ", GetLastError());
-   else
+   else {
       Print("Ordine modificato con successo, ticket=", info.order_id);
+      // Mantiene allineato il registro (il crawler cerca gli ordini per entry)
+      if(isPending)
+         UpdateRegistryEntry(info.magic_number, newPrice);
+   }
 }
 
 
