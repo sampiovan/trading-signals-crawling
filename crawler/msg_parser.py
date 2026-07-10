@@ -37,6 +37,8 @@ def parse_message(message_text, reply_text=None):
 		parse_order_placement,
 		parse_order_open,
 		parse_order_modify,
+		parse_move_sl_all,
+		lambda text: parse_move_sl_breakeven(text, reply_text),
 		parse_orders_multi_close,	# PRIMA del close singolo: il suo pattern è più generico e catturerebbe (male) i multi-close
 		parse_order_close,
 		parse_order_cancel
@@ -162,6 +164,89 @@ def parse_order_modify(text):
 			'comment': ''
 		}
 	return None
+
+
+def _move_sl_signal(asset, sl_value):
+	"""Segnale 'move_sl': l'EA applica il nuovo SL a TUTTE le posizioni a mercato sull'asset."""
+	return {
+		'order_id': '',
+		'magic_number': '',
+		'message_type': 'move_sl',
+		'signal_type': '',
+		'asset': asset,
+		'entry': 0,
+		'sl': sl_value,
+		'tp': 0,
+		'comment': ''
+	}
+
+
+def parse_move_sl_all(text):
+	"""
+	Riconosce la richiesta esplicita di spostare lo stop loss su tutte
+	le operazioni in corso su un asset.
+	Esempio:
+		"📊EUR/USD
+
+		MODIFICARE IL VALORE DI STOP LOSS SU TUTTE LE OPERAZIONI IN CORSO SU EUR/USD a  0.90000"
+	"""
+	pattern = re.compile(
+		r"(?i)MODIFICARE\s+IL\s+VALORE\s+DI\s+STOP\s+LOSS\s+SU\s+TUTTE\s+LE\s+OPERAZIONI\s+IN\s+CORSO\s+SU\s+([A-Z]{3}/[A-Z]{3})\s+a\s+([\d\.]+)",
+		re.DOTALL
+	)
+	match = pattern.search(text)
+
+	if match:
+		asset = match.group(1).upper().replace("/", "")
+		sl_value = match.group(2)
+		return _move_sl_signal(asset, sl_value)
+	return None
+
+
+def parse_move_sl_breakeven(text, reply_text=None):
+	"""
+	Riconosce lo spostamento dello stop loss a breakeven.
+	Esempio:
+		"GBP/USD Move Stop Loss to Breakeven o comunque in posizione di profitto a  1.33890✅"
+
+	Questo messaggio arriva di solito come RISPOSTA Telegram al messaggio
+	di apertura dell'ordine: se il testo citato (reply_text) è parsabile
+	e l'ordine è nel registro, il segnale è una 'modify' mirata sul
+	singolo ticket; altrimenti fallback su 'move_sl' (tutte le posizioni
+	a mercato sull'asset).
+	"""
+	pattern = re.compile(
+		r"(?i)([A-Z]{3}/[A-Z]{3})\s+Move\s+Stop\s+Loss\s+to\s+Breakeven.*?a\s+([\d\.]+)",
+		re.DOTALL
+	)
+	match = pattern.search(text)
+	if not match:
+		return None
+
+	asset = match.group(1).upper().replace("/", "")
+	sl_value = match.group(2)
+
+	# Prova a risalire all'ordine esatto tramite il messaggio citato
+	if reply_text:
+		ref = parse_order_placement(reply_text) or parse_order_open(reply_text)
+		if ref and ref['asset'] == asset:
+			order_id, magic_number = get_order_ticket(asset, ref['entry'], '')
+			if order_id:
+				logger.info(f"Move SL mirato via reply: asset={asset}, ticket={order_id}, nuovo SL={sl_value}")
+				return {
+					'order_id': order_id,
+					'magic_number': magic_number,
+					'message_type': 'modify',
+					'signal_type': '',
+					'asset': asset,
+					'entry': 0,		# invariato: l'EA mantiene il prezzo corrente
+					'sl': sl_value,
+					'tp': 0,		# invariato
+					'comment': ''
+				}
+		logger.info(f"Move SL: reply non risolto nel registro, applico a tutte le posizioni su {asset}.")
+
+	return _move_sl_signal(asset, sl_value)
 
 
 def parse_orders_multi_close(text):
