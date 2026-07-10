@@ -27,15 +27,21 @@ order_registry.csv  ──►  riletto dal crawler per risalire a ticket e magic
 
 ### Flusso dei segnali
 
-Il parser ([msg_parser.py](crawler/msg_parser.py)) riconosce cinque tipi di messaggio:
+Il parser ([msg_parser.py](crawler/msg_parser.py)) riconosce questi tipi di messaggio:
 
 | Tipo (`message_type`) | Significato | Esempio di messaggio |
 |---|---|---|
-| `placement` | Piazzamento di un ordine (anche pendente) | `📈BUY LIMIT EUR/USD  Prezzo 1.12500 (di apertura) …` |
+| `placement` | Piazzamento di un ordine pendente | `📈BUY LIMIT EUR/USD  Prezzo 1.12500 (di apertura) …` |
+| `placement` (a mercato) | Operazione diretta a mercato: l'EA esegue subito al prezzo corrente (Ask/Bid) | `ATTENZIONE QUESTA E' UNA OPERAZIONE IN SELL DIRETTA A MERCATO: … SELL GBP/USD Prezzo 1.34121 (nostro prezzo di apertura) …` |
 | `open` | Ordine aperto: se deriva da un `placement` noto, l'EA verifica solo che il pending sia diventato posizione; se non c'è un placement nel registro, l'EA apre un ordine diretto a mercato | `Ordine Buy EUR/USD Aperto  Prezzo di ingresso 1.12500` |
-| `modify` | Modifica del prezzo di ingresso | `(BUY LIMIT EUR/USD) - MODIFICARE IL PREZZO DI INGRESSO DA … A …` |
+| `modify` | Modifica del prezzo di ingresso (o del solo SL, se mirata via reply — vedi `move_sl`) | `(BUY LIMIT EUR/USD) - MODIFICARE IL PREZZO DI INGRESSO DA … A …` |
+| `move_sl` | Spostamento dello stop loss. Due varianti: "Move Stop Loss to Breakeven … a 1.33890" (se arriva come **risposta Telegram** al messaggio di apertura e l'ordine è nel registro, diventa una `modify` mirata sul singolo ticket) e "MODIFICARE IL VALORE DI STOP LOSS SU TUTTE LE OPERAZIONI IN CORSO SU EUR/USD a …". Senza ticket, l'EA applica il nuovo SL a **tutte** le posizioni a mercato sull'asset | `GBP/USD Move Stop Loss to Breakeven … a 1.33890✅` |
 | `close` | Chiusura manuale di una posizione | `CHIUDERE MANUALMENTE UNA POSIZIONE … (1.12500)` |
+| `close` (multiplo) | Chiusura di più posizioni (anche su asset diversi): produce un segnale `close` per ognuna; le posizioni non trovate nel registro vengono saltate con errore nel log, senza bloccare le altre | `CHIUDERE MANUALMENTE QUATTRO POSIZIONI DI CUI: UNA IN PROFITTO su EUR/USD (1.14700) …` |
 | `cancel` | Annullamento di un ordine pendente | `ANNULLARE BUY LIMIT EUR/USD … (1.12500)` |
+| — (notifica) | Chiusura automatica già avvenuta al broker (SL o breakeven): il crawler la riconosce e logga, nessun ordine | `CHIUSA A BREAKEVEN GBP/USD A (1.35290)✅`, `CHIUSURA IN STOP (4.704.50)` |
+
+> Il crawler legge anche il messaggio **citato** quando un segnale arriva come risposta Telegram: serve a collegare lo spostamento dello stop loss all'ordine esatto a cui si riferisce.
 
 Al momento del `placement` il crawler genera un **magic number** ([utils.py](crawler/utils.py)) che identifica il segnale. L'EA, dopo aver piazzato l'ordine, scrive in `order_registry.csv` la coppia magic number ↔ ticket del broker. Per i messaggi successivi (`open`, `modify`, `close`, `cancel`) il crawler consulta il registro ([order_registry.py](crawler/order_registry.py)) e recupera il ticket confrontando asset e prezzo di ingresso.
 
