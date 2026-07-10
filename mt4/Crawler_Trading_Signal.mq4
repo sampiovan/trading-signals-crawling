@@ -135,8 +135,9 @@ bool ParseCsvLine(string line, SignalInfo &info) {
 // Funzione per scrivere il ticket dell'ordine in un file CSV di registro
 //------------------------------------------------------------------
 void LogOrderTicket(int ticket, const SignalInfo &info) {
-   // Apri il file in modalità scrittura (FILE_WRITE|FILE_CSV|FILE_ANSI)
-   int handle = FileOpen(ORDER_REGISTRY_FILENAME, FILE_CSV | FILE_WRITE | FILE_ANSI);
+   // FILE_READ|FILE_WRITE: apre senza troncare. FILE_WRITE da solo azzererebbe
+   // il file a ogni ordine, perdendo tutte le righe del registro precedenti.
+   int handle = FileOpen(ORDER_REGISTRY_FILENAME, FILE_CSV | FILE_READ | FILE_WRITE | FILE_ANSI);
    if(handle < 0) {
       Print("Errore nell'aprire il file ", ORDER_REGISTRY_FILENAME, ": ", GetLastError());
       return;
