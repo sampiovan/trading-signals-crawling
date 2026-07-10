@@ -214,7 +214,7 @@ void DoPlacement(const SignalInfo &info) {
       info.sl,      // StopLoss
       info.tp,      // TakeProfit
       "Placement", // Comment
-      0,            // Magic number
+      StrToInteger(info.magic_number), // Magic number generato dal crawler
       0,            // Expiration
       clrBlue       // Arrow color
    );
