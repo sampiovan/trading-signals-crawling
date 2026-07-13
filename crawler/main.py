@@ -49,8 +49,18 @@ async def main():
 		message_text = event.raw_text
 		logger.info(f"Nuovo messaggio ricevuto: \n{message_text}\n\n")
 
+		# Se il messaggio è una risposta, recupera il testo del messaggio
+		# citato: serve ad alcuni parser (es. move SL) per risalire all'ordine
+		reply_text = None
 		try:
-			parsed = parse_message(message_text)
+			reply = await event.get_reply_message()
+			if reply:
+				reply_text = reply.raw_text
+		except Exception:
+			logger.exception("Impossibile recuperare il messaggio citato, proseguo senza.")
+
+		try:
+			signals = parse_message(message_text, reply_text=reply_text)
 		except OrderNotFoundException as e:
 			# Segnale riconosciuto ma ordine non presente nel registro:
 			# logga e resta in ascolto (il messaggio originale è nel log sopra)
@@ -60,10 +70,14 @@ async def main():
 			logger.exception("Errore inatteso nel parsing del messaggio, segnale scartato.")
 			return
 
-		if parsed:
-			save_signal(csv_fullpath, parsed)
-		else:
+		if signals is None:
 			logger.info("Messaggio non riconosciuto come segnale di trading.")
+			return
+		if not signals:
+			# Riconosciuto ma senza azioni (es. notifica di chiusura automatica)
+			return
+		for signal in signals:
+			save_signal(csv_fullpath, signal)
 
 	logger.info("In ascolto dei nuovi messaggi... (premi Ctrl+C per terminare)")
 	# Rimane in attesa indefinitamente
