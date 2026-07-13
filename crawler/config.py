@@ -8,8 +8,12 @@ _config = None
 # errore chiaro invece di un KeyError al primo accesso.
 REQUIRED_KEYS = {
 	'telegram': ['YOUR_API_ID', 'YOUR_API_HASH', 'SESSION_NAME', 'CHANNEL_ENTITY'],
-	'paths': ['MT4_FILES_FOLDER'],
 }
+
+
+def get_mt5_setting(config, key, default=''):
+	"""Legge una chiave opzionale della sezione [mt5] (assente nei config v1)."""
+	return config.get('mt5', key, fallback=default).strip()
 
 
 def _validate_config(parser, path):

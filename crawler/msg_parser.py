@@ -13,7 +13,7 @@ i pattern più specifici precedono quelli più generici.
 import re
 import logging
 
-from order_registry import load_order_registry, get_order_ticket
+from order_lookup import get_order_ticket
 from utils import generate_magic
 
 logger = logging.getLogger(__name__)
@@ -145,8 +145,8 @@ def _move_sl_signal(asset, sl_value):
 def parse_message(message_text, reply_text=None):
 	"""
 	Funzione principale che prova a riconoscere il tipo di messaggio
-	chiamando in sequenza le funzioni dedicate. Prima di ogni parsing,
-	viene aggiornato il registro globale degli ordini.
+	chiamando in sequenza le funzioni dedicate. Le lookup degli ordini
+	avvengono direttamente sulle posizioni live del conto MT5.
 
 	reply_text è il testo del messaggio Telegram citato (se il messaggio
 	è una risposta): alcuni parser lo usano per risalire all'ordine.
@@ -157,9 +157,6 @@ def parse_message(message_text, reply_text=None):
 	- una lista di segnali altrimenti (un messaggio può produrne più
 	  di uno, es. chiusura di più posizioni).
 	"""
-	registry = load_order_registry()	# Aggiorna il registro globale
-	logger.debug(f"Registro caricato: {registry}")
-
 	# I parser che usano il reply ricevono anche reply_text.
 	# L'ordine conta: i pattern più specifici devono precedere quelli
 	# più generici (es. multi-close prima della chiusura singola).

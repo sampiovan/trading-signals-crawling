@@ -7,9 +7,7 @@ config.ini
 logs/
 *.log
 
-# Output CSV e stato generati a runtime
-trading_signals.csv
-order_registry.csv
+# Stato generato a runtime
 crawler_state.json
 
 # Python
@@ -19,9 +17,6 @@ __pycache__/
 venv/
 *.egg-info/
 .pytest_cache/
-
-# MetaTrader (binari compilati)
-*.ex4
 
 # IDE / OS
 .idea/

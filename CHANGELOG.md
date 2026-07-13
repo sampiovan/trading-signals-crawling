@@ -10,6 +10,19 @@ Il formato segue [Keep a Changelog](https://keepachangelog.com/it/1.1.0/) e il p
 Ciclo di sviluppo **v2.0**: passaggio a MetaTrader 5 con esecuzione ordini diretta da Python
 (package ufficiale `MetaTrader5`), eliminazione dell'Expert Advisor e del ponte CSV.
 
+### Added
+- Executor MT5: esecuzione diretta dei segnali via `order_send` con esito sincrono,
+  retry sui retcode transitori (requote, prezzo cambiato, connessione) e filling mode
+  per simbolo; slippage e lotto configurabili in `[mt5]`.
+- Connessione al terminale con verifica bloccante del conto **hedging**.
+- Lookup degli ordini sulle posizioni e sui pending live del conto (tolleranza pip-aware,
+  best-match) al posto del registro CSV.
+- Notifica Telegram (Saved Messages) sui fallimenti definitivi di esecuzione.
+
+### Removed
+- Expert Advisor MQL4 e ponte CSV (`trading_signals.csv`, `order_registry.csv`):
+  restano disponibili nella v1 (tag `v1.0.0`, branch `release/v1.x`).
+
 ## [1.0.0] - 2026-07-13
 
 Versione stabile per **MetaTrader 4**: crawler Telegram (Python/Telethon) + Expert Advisor MQL4

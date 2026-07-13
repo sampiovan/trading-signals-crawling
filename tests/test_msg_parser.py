@@ -255,7 +255,6 @@ def test_multi_close_all_lookups_fail(monkeypatch):
 def test_multi_close_not_captured_by_single_close(monkeypatch):
     # Prima del fix il parser single-close catturava il messaggio multi
     # chiudendo UNA sola posizione: il dispatcher deve produrre N segnali
-    monkeypatch.setattr(msg_parser, 'load_order_registry', lambda: {})
     monkeypatch.setattr(msg_parser, 'get_order_ticket', lambda *a: ('9', '99999'))
 
     signals = parse_message(MSG_MULTI_CLOSE_4)
@@ -263,7 +262,6 @@ def test_multi_close_not_captured_by_single_close(monkeypatch):
 
 
 def test_single_close_still_works_via_dispatcher(monkeypatch):
-    monkeypatch.setattr(msg_parser, 'load_order_registry', lambda: {})
     monkeypatch.setattr(msg_parser, 'get_order_ticket', lambda *a: ('9', '99999'))
 
     signals = parse_message(MSG_CLOSE)
@@ -320,7 +318,6 @@ def test_market_order_ignores_pending_placement():
 
 
 def test_market_order_via_dispatcher(monkeypatch):
-    monkeypatch.setattr(msg_parser, 'load_order_registry', lambda: {})
     signals = parse_message(MSG_MARKET_SELL)
     assert len(signals) == 1
     assert signals[0]['message_type'] == 'placement'
@@ -398,7 +395,6 @@ def test_move_sl_breakeven_reply_asset_mismatch_falls_back(monkeypatch):
 
 
 def test_move_sl_via_dispatcher(monkeypatch):
-    monkeypatch.setattr(msg_parser, 'load_order_registry', lambda: {})
     monkeypatch.setattr(msg_parser, 'get_order_ticket', lambda *a: (None, None))
 
     signals = parse_message(MSG_MOVE_SL_ALL)
@@ -433,7 +429,6 @@ def test_close_notification_ignores_actionable_closes():
 
 
 def test_close_notification_via_dispatcher(monkeypatch):
-    monkeypatch.setattr(msg_parser, 'load_order_registry', lambda: {})
 
     # [] = riconosciuto ma senza azioni (diverso da None = non riconosciuto)
     assert parse_message(MSG_CLOSED_BREAKEVEN) == []
@@ -443,7 +438,6 @@ def test_close_notification_via_dispatcher(monkeypatch):
 # ----- parse_message (dispatcher) -----
 
 def test_parse_message_recognizes_each_type(monkeypatch):
-    monkeypatch.setattr(msg_parser, 'load_order_registry', lambda: {})
     monkeypatch.setattr(msg_parser, 'get_order_ticket', lambda *a: ('777', '88888'))
 
     # parse_message restituisce sempre una lista di segnali
@@ -460,5 +454,4 @@ def test_parse_message_recognizes_each_type(monkeypatch):
 
 
 def test_parse_message_returns_none_for_non_signal(monkeypatch):
-    monkeypatch.setattr(msg_parser, 'load_order_registry', lambda: {})
     assert parse_message(MSG_NOT_A_SIGNAL) is None
