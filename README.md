@@ -2,6 +2,8 @@
 
 [![CI](https://github.com/sampiovan/trading-signals-crawling/actions/workflows/ci.yml/badge.svg)](https://github.com/sampiovan/trading-signals-crawling/actions/workflows/ci.yml)
 
+> **Versioni** — la **v1.x** (questo ramo) è la versione stabile per **MetaTrader 4**: crawler Python + Expert Advisor MQL4 comunicanti via CSV. La **v2.0** in roadmap passerà a **MetaTrader 5** con esecuzione diretta degli ordini da Python (package ufficiale `MetaTrader5`), eliminando EA e ponte CSV.
+
 Sistema di copy-trading automatico composto da due componenti che comunicano tramite file CSV:
 
 1. **Crawler Python** (`crawler/`) — si connette a un canale Telegram con [Telethon](https://docs.telethon.dev/), riconosce i messaggi contenenti segnali di trading e li scrive in un file CSV nella cartella `Files` di MetaTrader 4.
@@ -128,6 +130,22 @@ python main.py
 Al primo avvio Telethon chiede il numero di telefono e il codice di verifica, poi salva la sessione nel file `<SESSION_NAME>.session` e i login successivi sono automatici.
 
 Il crawler resta in ascolto dei nuovi messaggi del canale e logga l'attività sia su console sia in `logs/crawler.log` (rotazione giornaliera a mezzanotte, 30 giorni di retention).
+
+Al riavvio il crawler **recupera i messaggi persi** durante il downtime: l'ID dell'ultimo messaggio processato è salvato in `crawler_state.json` (nella directory di lavoro) e all'avvio i messaggi successivi vengono riprocessati in ordine. Al primo avvio in assoluto lo storico del canale NON viene riprocessato.
+
+### Esecuzione come servizio (Windows)
+
+Per far girare il crawler in autonomia (avvio al logon, riavvio automatico in caso di errore) è disponibile uno script che lo registra come Scheduled Task:
+
+```powershell
+# dalla root del progetto
+powershell -ExecutionPolicy Bypass -File scripts\install-task.ps1
+
+# rimozione
+powershell -ExecutionPolicy Bypass -File scripts\uninstall-task.ps1
+```
+
+La task parte al logon dell'utente corrente, esegue `crawler\main.py` col Python del venv e viene riavviata (fino a 10 volte, a distanza di 1 minuto) se il processo esce con errore. Verifica lo stato con `Get-ScheduledTask TradingSignalsCrawler` e i log in `crawler\logs\crawler.log`.
 
 ## Formato dei file CSV
 

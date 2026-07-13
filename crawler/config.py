@@ -4,11 +4,37 @@ import configparser
 # Cache del ConfigParser: il file viene letto una sola volta
 _config = None
 
+# Chiavi obbligatorie per sezione: verificate all'avvio per dare un
+# errore chiaro invece di un KeyError al primo accesso.
+REQUIRED_KEYS = {
+	'telegram': ['YOUR_API_ID', 'YOUR_API_HASH', 'SESSION_NAME', 'CHANNEL_ENTITY'],
+	'paths': ['MT4_FILES_FOLDER'],
+}
+
+
+def _validate_config(parser, path):
+	"""Verifica sezioni e chiavi obbligatorie; solleva ValueError se ne mancano."""
+	missing = []
+	for section, keys in REQUIRED_KEYS.items():
+		if not parser.has_section(section):
+			missing.extend(f"[{section}] {key}" for key in keys)
+			continue
+		for key in keys:
+			if not parser.get(section, key, fallback='').strip():
+				missing.append(f"[{section}] {key}")
+	if missing:
+		raise ValueError(
+			f"Configurazione '{path}' incompleta, chiavi mancanti o vuote: "
+			+ ", ".join(missing)
+			+ ". Vedi config.example.ini per il formato atteso."
+		)
+
 
 def load_config(path='config.ini'):
 	"""
 	Carica il file di configurazione (default: config.ini nella directory
-	di lavoro corrente) e lo mette in cache per le letture successive.
+	di lavoro corrente), ne valida le chiavi obbligatorie e lo mette in
+	cache per le letture successive.
 	"""
 	global _config
 	if _config is None:
@@ -18,6 +44,7 @@ def load_config(path='config.ini'):
 				f"File di configurazione '{path}' non trovato. "
 				"Copia config.example.ini in config.ini e compila i valori."
 			)
+		_validate_config(parser, path)
 		_config = parser
 	return _config
 
