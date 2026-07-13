@@ -129,7 +129,7 @@ def _extract_order_ref(text):
 	SENZA lookup nel registro né log: serve a identificare l'ordine
 	citato quando un segnale arriva come risposta Telegram.
 	"""
-	match = _PLACEMENT_RE.search(text) or _OPEN_RE.search(text)
+	match = _PLACEMENT_RE.search(text) or _OPEN_RE.search(text) or _MARKET_ORDER_RE.search(text)
 	if match:
 		return match.group(2).upper().replace("/", ""), match.group(3)
 	return None
