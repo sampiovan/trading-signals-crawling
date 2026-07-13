@@ -1,3 +1,15 @@
+"""
+Riconoscimento dei messaggi del canale Telegram e conversione in segnali
+di trading per l'Expert Advisor (via CSV, vedi signals_csv).
+
+Contratto di parse_message(text, reply_text=None):
+- None  -> messaggio non riconosciuto;
+- []    -> riconosciuto ma nessuna azione (es. notifiche di chiusura automatica);
+- lista -> uno o più segnali (dict con lo schema di _build_signal).
+
+I parser sono elencati (e definiti nel file) nell'ordine di dispatch:
+i pattern più specifici precedono quelli più generici.
+"""
 import re
 import logging
 
@@ -12,15 +24,58 @@ class OrderNotFoundException(Exception):
 	pass
 
 
-# Regex dei messaggi di piazzamento/apertura: usate sia dai rispettivi
-# parser sia da _extract_order_ref per risolvere i reply Telegram.
-# In entrambe: group(2) = asset, group(3) = prezzo d'ingresso.
+# -------------------- Regex dei messaggi --------------------
+# Compilate una volta a livello di modulo. Nelle regex con più gruppi
+# l'asset è sempre nel formato XXX/YYY e i prezzi sono decimali col punto.
+
+# Piazzamento/apertura: usate sia dai parser sia da _extract_order_ref
+# per risolvere i reply Telegram. In entrambe: group(2)=asset, group(3)=entry.
 _PLACEMENT_RE = re.compile(
 	r"(?i)^(?:\S+\s*)?(BUY LIMIT|SELL LIMIT|BUY STOP|SELL STOP|BUY|SELL)\s+([A-Z]{3}/[A-Z]{3}).*?Prezzo\s+([\d\.]+).*?(?:di\s+apertura).*?Stop Loss\s*[^\d]*([\d\.]+).*?Take Profit\s*[^\d]*([\d\.]+)",
 	re.DOTALL
 )
 _OPEN_RE = re.compile(
 	r"(?i)Ordine\s+(BUY|SELL)\s+([A-Z]{3}/[A-Z]{3}).*?Aperto.*?Prezzo di ingresso\s+([\d\.]+)",
+	re.DOTALL
+)
+
+# Operazione diretta a mercato: trigger + blocco ordine
+_MARKET_TRIGGER_RE = re.compile(r"(?i)OPERAZIONE\s+IN\s+(?:BUY|SELL)\s+DIRETTA\s+A\s+MERCATO")
+_MARKET_ORDER_RE = re.compile(
+	r"(?i)(BUY|SELL)\s+([A-Z]{3}/[A-Z]{3})\s*.*?Prezzo\s+([\d\.]+).*?apertura.*?Stop Loss\s*[^\d]*([\d\.]+).*?Take Profit\s*[^\d]*([\d\.]+)",
+	re.DOTALL
+)
+
+# Modifica del prezzo d'ingresso di un pending
+_MODIFY_RE = re.compile(
+	r"(?i)\((BUY LIMIT|SELL LIMIT|BUY STOP|SELL STOP)\s+([A-Z]{3}/[A-Z]{3})\).*?MODIFICARE IL PREZZO DI INGRESSO DA\s+([\d\.]+)\s+A\s+([\d\.]+)",
+	re.DOTALL
+)
+
+# Spostamento dello stop loss (due varianti)
+_MOVE_SL_ALL_RE = re.compile(
+	r"(?i)MODIFICARE\s+IL\s+VALORE\s+DI\s+STOP\s+LOSS\s+SU\s+TUTTE\s+LE\s+OPERAZIONI\s+IN\s+CORSO\s+SU\s+([A-Z]{3}/[A-Z]{3})\s+a\s+([\d\.]+)",
+	re.DOTALL
+)
+_MOVE_SL_BREAKEVEN_RE = re.compile(
+	r"(?i)([A-Z]{3}/[A-Z]{3})\s+Move\s+Stop\s+Loss\s+to\s+Breakeven.*?a\s+([\d\.]+)",
+	re.DOTALL
+)
+
+# Chiusure: multipla (trigger + righe posizione), notifica automatica, singola
+_MULTI_CLOSE_TRIGGER_RE = re.compile(r"(?i)CHIUDERE\s+MANUALMENTE\s+\w+\s+POSIZIONI")
+_MULTI_CLOSE_POSITION_RE = re.compile(
+	r"(?i)UNA\s+IN\s+(?:PROFITTO|PERDITA|PARI)\s+su\s+([A-Z]{3}/[A-Z]{3})\s*\(([\d\.]+)"
+)
+_CLOSE_NOTIFICATION_RE = re.compile(r"(?i)CHIUSA\s+A\s+BREAKEVEN|CHIUSURA\s+IN\s+STOP")
+_CLOSE_RE = re.compile(
+	r"(?i)[\s\S]*([A-Z]{3}/[A-Z]{3}).*?CHIUDERE.*?\(([\d\.]+)\)",
+	re.DOTALL
+)
+
+# Annullamento di un pending
+_CANCEL_RE = re.compile(
+	r"(?i)ANNULLARE\s+(BUY LIMIT|SELL LIMIT|BUY STOP|SELL STOP)\s+([A-Z]{3}/[A-Z]{3}).*?\(([\d\.]+)",
 	re.DOTALL
 )
 
@@ -133,6 +188,8 @@ def parse_message(message_text, reply_text=None):
 	return None
 
 
+# -------------------- Parser (in ordine di dispatch) --------------------
+
 def parse_order_placement(text):
 	"""
 	Riconosce un messaggio di piazzamento ordine.
@@ -183,15 +240,10 @@ def parse_market_order(text):
 	l'entry indicata dal provider, usata poi per il matching dei messaggi
 	successivi (move SL, close).
 	"""
-	trigger = re.compile(r"(?i)OPERAZIONE\s+IN\s+(?:BUY|SELL)\s+DIRETTA\s+A\s+MERCATO")
-	if not trigger.search(text):
+	if not _MARKET_TRIGGER_RE.search(text):
 		return None
 
-	pattern = re.compile(
-		r"(?i)(BUY|SELL)\s+([A-Z]{3}/[A-Z]{3})\s*.*?Prezzo\s+([\d\.]+).*?apertura.*?Stop Loss\s*[^\d]*([\d\.]+).*?Take Profit\s*[^\d]*([\d\.]+)",
-		re.DOTALL
-	)
-	match = pattern.search(text)
+	match = _MARKET_ORDER_RE.search(text)
 	if not match:
 		logger.warning("Operazione a mercato riconosciuta ma blocco ordine non estratto.")
 		return None
@@ -246,11 +298,7 @@ def parse_order_modify(text):
 	Esempio:
 		"(BUY LIMIT EUR/USD) - MODIFICARE IL PREZZO DI INGRESSO DA 1.12500 A  1.13000  mantenendo uguale Stop loss e Take Profit 👍✅"
 	"""
-	pattern = re.compile(
-		r"(?i)\((BUY LIMIT|SELL LIMIT|BUY STOP|SELL STOP)\s+([A-Z]{3}/[A-Z]{3})\).*?MODIFICARE IL PREZZO DI INGRESSO DA\s+([\d\.]+)\s+A\s+([\d\.]+)",
-		re.DOTALL
-	)
-	match = pattern.search(text)
+	match = _MODIFY_RE.search(text)
 
 	if match:
 		# Estraggo i valori
@@ -282,11 +330,7 @@ def parse_move_sl_all(text):
 
 		MODIFICARE IL VALORE DI STOP LOSS SU TUTTE LE OPERAZIONI IN CORSO SU EUR/USD a  0.90000"
 	"""
-	pattern = re.compile(
-		r"(?i)MODIFICARE\s+IL\s+VALORE\s+DI\s+STOP\s+LOSS\s+SU\s+TUTTE\s+LE\s+OPERAZIONI\s+IN\s+CORSO\s+SU\s+([A-Z]{3}/[A-Z]{3})\s+a\s+([\d\.]+)",
-		re.DOTALL
-	)
-	match = pattern.search(text)
+	match = _MOVE_SL_ALL_RE.search(text)
 
 	if match:
 		asset = match.group(1).upper().replace("/", "")
@@ -307,11 +351,7 @@ def parse_move_sl_breakeven(text, reply_text=None):
 	singolo ticket; altrimenti fallback su 'move_sl' (tutte le posizioni
 	a mercato sull'asset).
 	"""
-	pattern = re.compile(
-		r"(?i)([A-Z]{3}/[A-Z]{3})\s+Move\s+Stop\s+Loss\s+to\s+Breakeven.*?a\s+([\d\.]+)",
-		re.DOTALL
-	)
-	match = pattern.search(text)
+	match = _MOVE_SL_BREAKEVEN_RE.search(text)
 	if not match:
 		return None
 
@@ -354,14 +394,10 @@ def parse_orders_multi_close(text):
 
 		TOTALE IN PROFITTO✅✅✅"
 	"""
-	trigger = re.compile(r"(?i)CHIUDERE\s+MANUALMENTE\s+\w+\s+POSIZIONI")
-	if not trigger.search(text):
+	if not _MULTI_CLOSE_TRIGGER_RE.search(text):
 		return None
 
-	positions = re.findall(
-		r"(?i)UNA\s+IN\s+(?:PROFITTO|PERDITA|PARI)\s+su\s+([A-Z]{3}/[A-Z]{3})\s*\(([\d\.]+)",
-		text
-	)
+	positions = _MULTI_CLOSE_POSITION_RE.findall(text)
 	if not positions:
 		logger.warning("Messaggio multi-close riconosciuto ma nessuna posizione estratta.")
 		return None
@@ -395,8 +431,7 @@ def parse_close_notification(text):
 
 	Restituisce [] (riconosciuto, nessun segnale) o None se non è una notifica.
 	"""
-	pattern = re.compile(r"(?i)CHIUSA\s+A\s+BREAKEVEN|CHIUSURA\s+IN\s+STOP")
-	if pattern.search(text):
+	if _CLOSE_NOTIFICATION_RE.search(text):
 		logger.info("Notifica di chiusura automatica (SL/breakeven eseguito dal broker): nessuna azione necessaria.")
 		return []
 	return None
@@ -410,11 +445,7 @@ def parse_order_close(text):
 
 		CHIUDERE MANUALMENTE UNA POSIZIONE IN PROFITTO SU EUR/USD  (1.12500)  ✅✅✅"
 	"""
-	pattern = re.compile(
-		r"(?i)[\s\S]*([A-Z]{3}/[A-Z]{3}).*?CHIUDERE.*?\(([\d\.]+)\)",
-		re.DOTALL
-	)
-	match = pattern.search(text)
+	match = _CLOSE_RE.search(text)
 
 	if match:
 		asset = match.group(1).upper().replace("/", "")
@@ -429,11 +460,7 @@ def parse_order_cancel(text):
 	Esempio:
 		"ANNULLARE BUY LIMIT EUR/USD ... (1.12500)✅"
 	"""
-	pattern = re.compile(
-		r"(?i)ANNULLARE\s+(BUY LIMIT|SELL LIMIT|BUY STOP|SELL STOP)\s+([A-Z]{3}/[A-Z]{3}).*?\(([\d\.]+)",
-		re.DOTALL
-	)
-	match = pattern.search(text)
+	match = _CANCEL_RE.search(text)
 
 	if match:
 		# Estraggo i valori
