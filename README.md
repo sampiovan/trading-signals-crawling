@@ -2,6 +2,8 @@
 
 [![CI](https://github.com/sampiovan/trading-signals-crawling/actions/workflows/ci.yml/badge.svg)](https://github.com/sampiovan/trading-signals-crawling/actions/workflows/ci.yml)
 
+> **Versioni** — la **v1.x** (questo ramo) è la versione stabile per **MetaTrader 4**: crawler Python + Expert Advisor MQL4 comunicanti via CSV. La **v2.0** in roadmap passerà a **MetaTrader 5** con esecuzione diretta degli ordini da Python (package ufficiale `MetaTrader5`), eliminando EA e ponte CSV.
+
 Sistema di copy-trading automatico composto da due componenti che comunicano tramite file CSV:
 
 1. **Crawler Python** (`crawler/`) — si connette a un canale Telegram con [Telethon](https://docs.telethon.dev/), riconosce i messaggi contenenti segnali di trading e li scrive in un file CSV nella cartella `Files` di MetaTrader 4.
