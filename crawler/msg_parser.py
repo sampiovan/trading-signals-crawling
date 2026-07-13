@@ -1,3 +1,15 @@
+"""
+Riconoscimento dei messaggi del canale Telegram e conversione in segnali
+di trading per l'Expert Advisor (via CSV, vedi signals_csv).
+
+Contratto di parse_message(text, reply_text=None):
+- None  -> messaggio non riconosciuto;
+- []    -> riconosciuto ma nessuna azione (es. notifiche di chiusura automatica);
+- lista -> uno o più segnali (dict con lo schema di _build_signal).
+
+I parser sono elencati (e definiti nel file) nell'ordine di dispatch:
+i pattern più specifici precedono quelli più generici.
+"""
 import re
 import logging
 
@@ -11,6 +23,124 @@ logger = logging.getLogger(__name__)
 class OrderNotFoundException(Exception):
 	pass
 
+
+# -------------------- Regex dei messaggi --------------------
+# Compilate una volta a livello di modulo. Nelle regex con più gruppi
+# l'asset è sempre nel formato XXX/YYY e i prezzi sono decimali col punto.
+
+# Piazzamento/apertura: usate sia dai parser sia da _extract_order_ref
+# per risolvere i reply Telegram. In entrambe: group(2)=asset, group(3)=entry.
+_PLACEMENT_RE = re.compile(
+	r"(?i)^(?:\S+\s*)?(BUY LIMIT|SELL LIMIT|BUY STOP|SELL STOP|BUY|SELL)\s+([A-Z]{3}/[A-Z]{3}).*?Prezzo\s+([\d\.]+).*?(?:di\s+apertura).*?Stop Loss\s*[^\d]*([\d\.]+).*?Take Profit\s*[^\d]*([\d\.]+)",
+	re.DOTALL
+)
+_OPEN_RE = re.compile(
+	r"(?i)Ordine\s+(BUY|SELL)\s+([A-Z]{3}/[A-Z]{3}).*?Aperto.*?Prezzo di ingresso\s+([\d\.]+)",
+	re.DOTALL
+)
+
+# Operazione diretta a mercato: trigger + blocco ordine
+_MARKET_TRIGGER_RE = re.compile(r"(?i)OPERAZIONE\s+IN\s+(?:BUY|SELL)\s+DIRETTA\s+A\s+MERCATO")
+_MARKET_ORDER_RE = re.compile(
+	r"(?i)(BUY|SELL)\s+([A-Z]{3}/[A-Z]{3})\s*.*?Prezzo\s+([\d\.]+).*?apertura.*?Stop Loss\s*[^\d]*([\d\.]+).*?Take Profit\s*[^\d]*([\d\.]+)",
+	re.DOTALL
+)
+
+# Modifica del prezzo d'ingresso di un pending
+_MODIFY_RE = re.compile(
+	r"(?i)\((BUY LIMIT|SELL LIMIT|BUY STOP|SELL STOP)\s+([A-Z]{3}/[A-Z]{3})\).*?MODIFICARE IL PREZZO DI INGRESSO DA\s+([\d\.]+)\s+A\s+([\d\.]+)",
+	re.DOTALL
+)
+
+# Spostamento dello stop loss (due varianti)
+_MOVE_SL_ALL_RE = re.compile(
+	r"(?i)MODIFICARE\s+IL\s+VALORE\s+DI\s+STOP\s+LOSS\s+SU\s+TUTTE\s+LE\s+OPERAZIONI\s+IN\s+CORSO\s+SU\s+([A-Z]{3}/[A-Z]{3})\s+a\s+([\d\.]+)",
+	re.DOTALL
+)
+_MOVE_SL_BREAKEVEN_RE = re.compile(
+	r"(?i)([A-Z]{3}/[A-Z]{3})\s+Move\s+Stop\s+Loss\s+to\s+Breakeven.*?a\s+([\d\.]+)",
+	re.DOTALL
+)
+
+# Chiusure: multipla (trigger + righe posizione), notifica automatica, singola
+_MULTI_CLOSE_TRIGGER_RE = re.compile(r"(?i)CHIUDERE\s+MANUALMENTE\s+\w+\s+POSIZIONI")
+_MULTI_CLOSE_POSITION_RE = re.compile(
+	r"(?i)UNA\s+IN\s+(?:PROFITTO|PERDITA|PARI)\s+su\s+([A-Z]{3}/[A-Z]{3})\s*\(([\d\.]+)"
+)
+_CLOSE_NOTIFICATION_RE = re.compile(r"(?i)CHIUSA\s+A\s+BREAKEVEN|CHIUSURA\s+IN\s+STOP")
+_CLOSE_RE = re.compile(
+	r"(?i)[\s\S]*([A-Z]{3}/[A-Z]{3}).*?CHIUDERE.*?\(([\d\.]+)\)",
+	re.DOTALL
+)
+
+# Annullamento di un pending
+_CANCEL_RE = re.compile(
+	r"(?i)ANNULLARE\s+(BUY LIMIT|SELL LIMIT|BUY STOP|SELL STOP)\s+([A-Z]{3}/[A-Z]{3}).*?\(([\d\.]+)",
+	re.DOTALL
+)
+
+
+# -------------------- Helper privati --------------------
+
+def _build_signal(message_type, asset, signal_type='', order_id='', magic_number='',
+                  entry='', sl='', tp='', comment=''):
+	"""Unica definizione dello schema del segnale (vedi signals_csv.CSV_HEADER)."""
+	return {
+		'order_id': order_id,
+		'magic_number': magic_number,
+		'message_type': message_type,
+		'signal_type': signal_type,
+		'asset': asset,
+		'entry': entry,
+		'sl': sl,
+		'tp': tp,
+		'comment': comment
+	}
+
+
+def _find_order_or_raise(asset, entry, signal_type, context):
+	"""Lookup nel registro; solleva OrderNotFoundException se l'ordine non c'è."""
+	order_id, magic_number = get_order_ticket(asset, entry, signal_type)
+	if not order_id:
+		raise OrderNotFoundException(
+			f"Order ID non trovato per segnale {context}: asset={asset}, entry={entry}, signal={signal_type}"
+		)
+	return order_id, magic_number
+
+
+def _close_signal(asset, entry_price):
+	"""
+	Chiusura atomica di UNA posizione: lookup per (asset, prezzo d'entrata)
+	e costruzione del segnale 'close'. Solleva OrderNotFoundException se
+	la posizione non è nel registro.
+	"""
+	order_id, magic_number = _find_order_or_raise(asset, entry_price, '', 'close')
+	return _build_signal(
+		'close', asset,
+		order_id=order_id,
+		magic_number=magic_number,
+		entry=0.0		# chiusura al prezzo di mercato corrente
+	)
+
+
+def _extract_order_ref(text):
+	"""
+	Estrae (asset, entry) da un messaggio di piazzamento o di apertura,
+	SENZA lookup nel registro né log: serve a identificare l'ordine
+	citato quando un segnale arriva come risposta Telegram.
+	"""
+	match = _PLACEMENT_RE.search(text) or _OPEN_RE.search(text)
+	if match:
+		return match.group(2).upper().replace("/", ""), match.group(3)
+	return None
+
+
+def _move_sl_signal(asset, sl_value):
+	"""Segnale 'move_sl': l'EA applica il nuovo SL a TUTTE le posizioni a mercato sull'asset."""
+	return _build_signal('move_sl', asset, entry=0, sl=sl_value, tp=0)
+
+
+# -------------------- Dispatcher --------------------
 
 def parse_message(message_text, reply_text=None):
 	"""
@@ -58,6 +188,8 @@ def parse_message(message_text, reply_text=None):
 	return None
 
 
+# -------------------- Parser (in ordine di dispatch) --------------------
+
 def parse_order_placement(text):
 	"""
 	Riconosce un messaggio di piazzamento ordine.
@@ -69,24 +201,18 @@ def parse_order_placement(text):
 
 		 Take Profit  🟢  1.20000"
 	"""
-	pattern = re.compile(
-		r"(?i)^(?:\S+\s*)?(BUY LIMIT|SELL LIMIT|BUY STOP|SELL STOP|BUY|SELL)\s+([A-Z]{3}/[A-Z]{3}).*?Prezzo\s+([\d\.]+).*?(?:di\s+apertura).*?Stop Loss\s*[^\d]*([\d\.]+).*?Take Profit\s*[^\d]*([\d\.]+)",
-		re.DOTALL
-	)
-	match = pattern.search(text)
+	match = _PLACEMENT_RE.search(text)
 
 	if match:
-		return {
-			'order_id': '',			# Non ancora noto al momento della creazione
-			'magic_number': generate_magic(),		# Genera un magic number per il segnale
-			'message_type': 'placement',
-			'signal_type': match.group(1).upper(),
-			'asset': match.group(2).upper().replace("/", ""),
-			'entry': match.group(3),
-			'sl': match.group(4),
-			'tp': match.group(5),
-			'comment': ''
-		}
+		return _build_signal(
+			'placement',
+			match.group(2).upper().replace("/", ""),
+			signal_type=match.group(1).upper(),
+			magic_number=generate_magic(),	# order_id non ancora noto: il segnale è identificato dal magic
+			entry=match.group(3),
+			sl=match.group(4),
+			tp=match.group(5)
+		)
 	return None
 
 
@@ -114,30 +240,23 @@ def parse_market_order(text):
 	l'entry indicata dal provider, usata poi per il matching dei messaggi
 	successivi (move SL, close).
 	"""
-	trigger = re.compile(r"(?i)OPERAZIONE\s+IN\s+(?:BUY|SELL)\s+DIRETTA\s+A\s+MERCATO")
-	if not trigger.search(text):
+	if not _MARKET_TRIGGER_RE.search(text):
 		return None
 
-	pattern = re.compile(
-		r"(?i)(BUY|SELL)\s+([A-Z]{3}/[A-Z]{3})\s*.*?Prezzo\s+([\d\.]+).*?apertura.*?Stop Loss\s*[^\d]*([\d\.]+).*?Take Profit\s*[^\d]*([\d\.]+)",
-		re.DOTALL
-	)
-	match = pattern.search(text)
+	match = _MARKET_ORDER_RE.search(text)
 	if not match:
 		logger.warning("Operazione a mercato riconosciuta ma blocco ordine non estratto.")
 		return None
 
-	return {
-		'order_id': '',
-		'magic_number': generate_magic(),
-		'message_type': 'placement',
-		'signal_type': match.group(1).upper(),
-		'asset': match.group(2).upper().replace("/", ""),
-		'entry': match.group(3),
-		'sl': match.group(4),
-		'tp': match.group(5),
-		'comment': ''
-	}
+	return _build_signal(
+		'placement',
+		match.group(2).upper().replace("/", ""),
+		signal_type=match.group(1).upper(),
+		magic_number=generate_magic(),
+		entry=match.group(3),
+		sl=match.group(4),
+		tp=match.group(5)
+	)
 
 
 def parse_order_open(text):
@@ -147,11 +266,7 @@ def parse_order_open(text):
 		"Ordine Buy  EUR/USD    Aperto
 		Prezzo di ingresso  1.12500"
 	"""
-	pattern = re.compile(
-		r"(?i)Ordine\s+(BUY|SELL)\s+([A-Z]{3}/[A-Z]{3}).*?Aperto.*?Prezzo di ingresso\s+([\d\.]+)",
-		re.DOTALL
-	)
-	match = pattern.search(text)
+	match = _OPEN_RE.search(text)
 
 	if match:
 		# Estraggo i valori
@@ -167,17 +282,13 @@ def parse_order_open(text):
 			logger.info(f"Nessun pending nel registro per open {asset} @ {entry}: ordine diretto a mercato.")
 			order_id = ''
 			magic_number = generate_magic()
-		return {
-			'order_id': order_id,
-			'magic_number': magic_number,
-			'message_type': 'open',
-			'signal_type': signal_type,
-			'asset': asset,
-			'entry': entry,
-			'sl': '',
-			'tp': '',
-			'comment': ''
-		}
+		return _build_signal(
+			'open', asset,
+			signal_type=signal_type,
+			order_id=order_id,
+			magic_number=magic_number,
+			entry=entry
+		)
 	return None
 
 
@@ -187,50 +298,27 @@ def parse_order_modify(text):
 	Esempio:
 		"(BUY LIMIT EUR/USD) - MODIFICARE IL PREZZO DI INGRESSO DA 1.12500 A  1.13000  mantenendo uguale Stop loss e Take Profit 👍✅"
 	"""
-	pattern = re.compile(
-		r"(?i)\((BUY LIMIT|SELL LIMIT|BUY STOP|SELL STOP)\s+([A-Z]{3}/[A-Z]{3})\).*?MODIFICARE IL PREZZO DI INGRESSO DA\s+([\d\.]+)\s+A\s+([\d\.]+)",
-		re.DOTALL
-	)
-	match = pattern.search(text)
+	match = _MODIFY_RE.search(text)
 
 	if match:
 		# Estraggo i valori
 		signal_type = match.group(1).upper()
 		asset = match.group(2).upper().replace("/", "")
 		old_price = match.group(3)
-		new_price = match.group(4)	# Vecchio prezzo limite
+		new_price = match.group(4)
 
-		# Cerco l'ordine per il vecchio prezzo d'entrata
-		order_id, magic_number = get_order_ticket(asset, old_price, signal_type)
-		if not order_id:
-			raise OrderNotFoundException(f"Order ID non trovato per segnale open: asset={asset}, entry={old_price}, signal={signal_type}")
-		return {
-			'order_id': order_id,
-			'magic_number': magic_number,
-			'message_type': 'modify',
-			'signal_type': signal_type,
-			'asset': asset,
-			'entry': new_price,		# Nuovo prezzo di ingresso
-			'sl': 0,
-			'tp': 0,
-			'comment': ''
-		}
+		# La lookup avviene sul VECCHIO prezzo d'entrata, il segnale porta il nuovo
+		order_id, magic_number = _find_order_or_raise(asset, old_price, signal_type, 'modify')
+		return _build_signal(
+			'modify', asset,
+			signal_type=signal_type,
+			order_id=order_id,
+			magic_number=magic_number,
+			entry=new_price,	# Nuovo prezzo di ingresso
+			sl=0,				# 0 = invariato
+			tp=0				# 0 = invariato
+		)
 	return None
-
-
-def _move_sl_signal(asset, sl_value):
-	"""Segnale 'move_sl': l'EA applica il nuovo SL a TUTTE le posizioni a mercato sull'asset."""
-	return {
-		'order_id': '',
-		'magic_number': '',
-		'message_type': 'move_sl',
-		'signal_type': '',
-		'asset': asset,
-		'entry': 0,
-		'sl': sl_value,
-		'tp': 0,
-		'comment': ''
-	}
 
 
 def parse_move_sl_all(text):
@@ -242,11 +330,7 @@ def parse_move_sl_all(text):
 
 		MODIFICARE IL VALORE DI STOP LOSS SU TUTTE LE OPERAZIONI IN CORSO SU EUR/USD a  0.90000"
 	"""
-	pattern = re.compile(
-		r"(?i)MODIFICARE\s+IL\s+VALORE\s+DI\s+STOP\s+LOSS\s+SU\s+TUTTE\s+LE\s+OPERAZIONI\s+IN\s+CORSO\s+SU\s+([A-Z]{3}/[A-Z]{3})\s+a\s+([\d\.]+)",
-		re.DOTALL
-	)
-	match = pattern.search(text)
+	match = _MOVE_SL_ALL_RE.search(text)
 
 	if match:
 		asset = match.group(1).upper().replace("/", "")
@@ -267,11 +351,7 @@ def parse_move_sl_breakeven(text, reply_text=None):
 	singolo ticket; altrimenti fallback su 'move_sl' (tutte le posizioni
 	a mercato sull'asset).
 	"""
-	pattern = re.compile(
-		r"(?i)([A-Z]{3}/[A-Z]{3})\s+Move\s+Stop\s+Loss\s+to\s+Breakeven.*?a\s+([\d\.]+)",
-		re.DOTALL
-	)
-	match = pattern.search(text)
+	match = _MOVE_SL_BREAKEVEN_RE.search(text)
 	if not match:
 		return None
 
@@ -280,22 +360,19 @@ def parse_move_sl_breakeven(text, reply_text=None):
 
 	# Prova a risalire all'ordine esatto tramite il messaggio citato
 	if reply_text:
-		ref = parse_order_placement(reply_text) or parse_order_open(reply_text)
-		if ref and ref['asset'] == asset:
-			order_id, magic_number = get_order_ticket(asset, ref['entry'], '')
+		ref = _extract_order_ref(reply_text)
+		if ref and ref[0] == asset:
+			order_id, magic_number = get_order_ticket(asset, ref[1], '')
 			if order_id:
 				logger.info(f"Move SL mirato via reply: asset={asset}, ticket={order_id}, nuovo SL={sl_value}")
-				return {
-					'order_id': order_id,
-					'magic_number': magic_number,
-					'message_type': 'modify',
-					'signal_type': '',
-					'asset': asset,
-					'entry': 0,		# invariato: l'EA mantiene il prezzo corrente
-					'sl': sl_value,
-					'tp': 0,		# invariato
-					'comment': ''
-				}
+				return _build_signal(
+					'modify', asset,
+					order_id=order_id,
+					magic_number=magic_number,
+					entry=0,	# invariato: l'EA mantiene il prezzo corrente
+					sl=sl_value,
+					tp=0		# invariato
+				)
 		logger.info(f"Move SL: reply non risolto nel registro, applico a tutte le posizioni su {asset}.")
 
 	return _move_sl_signal(asset, sl_value)
@@ -317,14 +394,10 @@ def parse_orders_multi_close(text):
 
 		TOTALE IN PROFITTO✅✅✅"
 	"""
-	trigger = re.compile(r"(?i)CHIUDERE\s+MANUALMENTE\s+\w+\s+POSIZIONI")
-	if not trigger.search(text):
+	if not _MULTI_CLOSE_TRIGGER_RE.search(text):
 		return None
 
-	positions = re.findall(
-		r"(?i)UNA\s+IN\s+(?:PROFITTO|PERDITA|PARI)\s+su\s+([A-Z]{3}/[A-Z]{3})\s*\(([\d\.]+)",
-		text
-	)
+	positions = _MULTI_CLOSE_POSITION_RE.findall(text)
 	if not positions:
 		logger.warning("Messaggio multi-close riconosciuto ma nessuna posizione estratta.")
 		return None
@@ -332,23 +405,11 @@ def parse_orders_multi_close(text):
 	signals = []
 	for raw_asset, entry_price in positions:
 		asset = raw_asset.upper().replace("/", "")
-
-		order_id, magic_number = get_order_ticket(asset, entry_price, '')
-		if not order_id:
+		try:
+			signals.append(_close_signal(asset, entry_price))
+		except OrderNotFoundException:
 			# Successo parziale: non scartare le altre posizioni del messaggio
 			logger.error(f"Multi-close: ordine non trovato nel registro per asset={asset}, entry={entry_price}. Posizione saltata.")
-			continue
-		signals.append({
-			'order_id': order_id,
-			'magic_number': magic_number,
-			'message_type': 'close',
-			'asset': asset,
-			'signal_type': '',
-			'entry': 0.0,	# Prezzo di chiusura (a mercato)
-			'sl': '',
-			'tp': '',
-			'comment': ''
-		})
 
 	if not signals:
 		raise OrderNotFoundException(
@@ -370,8 +431,7 @@ def parse_close_notification(text):
 
 	Restituisce [] (riconosciuto, nessun segnale) o None se non è una notifica.
 	"""
-	pattern = re.compile(r"(?i)CHIUSA\s+A\s+BREAKEVEN|CHIUSURA\s+IN\s+STOP")
-	if pattern.search(text):
+	if _CLOSE_NOTIFICATION_RE.search(text):
 		logger.info("Notifica di chiusura automatica (SL/breakeven eseguito dal broker): nessuna azione necessaria.")
 		return []
 	return None
@@ -385,33 +445,12 @@ def parse_order_close(text):
 
 		CHIUDERE MANUALMENTE UNA POSIZIONE IN PROFITTO SU EUR/USD  (1.12500)  ✅✅✅"
 	"""
-	pattern = re.compile(
-		r"(?i)[\s\S]*([A-Z]{3}/[A-Z]{3}).*?CHIUDERE.*?\(([\d\.]+)\)",
-		re.DOTALL
-	)
-	match = pattern.search(text)
+	match = _CLOSE_RE.search(text)
 
 	if match:
-		# Estraggo i valori
 		asset = match.group(1).upper().replace("/", "")
 		entry_price = match.group(2)
-		close_price = 0.0
-
-		# Cerco l'ordine per il prezzo d'entrata
-		order_id, magic_number = get_order_ticket(asset, entry_price, '')
-		if not order_id:
-			raise OrderNotFoundException(f"Order ID non trovato per segnale close: asset={asset}, entry={entry_price}")
-		return {
-			'order_id': order_id,
-			'magic_number': magic_number,
-			'message_type': 'close',
-			'asset': asset,
-			'signal_type': '',	# Non specificato
-			'entry': close_price,	# Prezzo di chiusura
-			'sl': '',
-			'tp': '',
-			'comment': ''
-		}
+		return _close_signal(asset, entry_price)
 	return None
 
 
@@ -421,11 +460,7 @@ def parse_order_cancel(text):
 	Esempio:
 		"ANNULLARE BUY LIMIT EUR/USD ... (1.12500)✅"
 	"""
-	pattern = re.compile(
-		r"(?i)ANNULLARE\s+(BUY LIMIT|SELL LIMIT|BUY STOP|SELL STOP)\s+([A-Z]{3}/[A-Z]{3}).*?\(([\d\.]+)",
-		re.DOTALL
-	)
-	match = pattern.search(text)
+	match = _CANCEL_RE.search(text)
 
 	if match:
 		# Estraggo i valori
@@ -433,18 +468,12 @@ def parse_order_cancel(text):
 		asset = match.group(2).upper().replace("/", "")
 		entry = match.group(3)
 
-		order_id, magic_number = get_order_ticket(asset, entry, signal_type)
-		if not order_id:
-			raise OrderNotFoundException(f"Order ID non trovato per segnale cancel: asset={asset}, entry={entry}, signal={signal_type}")
-		return {
-			'order_id': order_id,
-			'magic_number': magic_number,
-			'message_type': 'cancel',
-			'signal_type': signal_type,
-			'asset': asset,
-			'entry': entry,
-			'sl': '',
-			'tp': '',
-			'comment': ''
-		}
+		order_id, magic_number = _find_order_or_raise(asset, entry, signal_type, 'cancel')
+		return _build_signal(
+			'cancel', asset,
+			signal_type=signal_type,
+			order_id=order_id,
+			magic_number=magic_number,
+			entry=entry
+		)
 	return None
