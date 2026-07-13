@@ -1,4 +1,5 @@
 import os
+import sys
 import asyncio
 from telethon import TelegramClient, events
 
@@ -136,3 +137,5 @@ if __name__ == '__main__':
 		logger.info("Arresto da tastiera. Fine.")
 	except Exception:
 		logger.exception("Errore inaspettato durante l'esecuzione del crawler")
+		# Exit code != 0: permette alla Scheduled Task di riavviare il crawler
+		sys.exit(1)
