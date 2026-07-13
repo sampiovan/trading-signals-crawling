@@ -44,10 +44,15 @@ class FakeMT5:
         return tuple(o for o in self._orders if ticket is None or o.ticket == ticket)
 
     def symbol_info(self, symbol):
-        return SimpleNamespace(filling_mode=2)  # supporta IOC
+        return SimpleNamespace(filling_mode=2,  # supporta IOC
+                               volume_min=0.01, volume_max=50.0, volume_step=0.01,
+                               trade_tick_size=0.00001, trade_tick_value=1.0)
 
     def symbol_info_tick(self, symbol):
         return SimpleNamespace(ask=1.20010, bid=1.20000)
+
+    def account_info(self):
+        return SimpleNamespace(equity=100000.0)
 
     def last_error(self):
         return (-1, "errore finto")
@@ -74,10 +79,11 @@ def make_signal(**overrides):
 
 @pytest.fixture(autouse=True)
 def wire_stub(monkeypatch):
-    """Config neutro, niente sleep nei retry, resolve_symbol identità."""
+    """Config neutro, niente sleep nei retry, resolve_symbol identità, lotto fisso."""
     monkeypatch.setattr(executor, 'load_config', lambda: None)
     monkeypatch.setattr(executor, 'get_mt5_setting',
                         lambda cfg, key, default='': default)
+    monkeypatch.setattr(executor, 'compute_lot', lambda signal, si, ai: 0.01)
     monkeypatch.setattr(executor.time, 'sleep', lambda s: None)
     monkeypatch.setattr(mt5_client, 'resolve_symbol', lambda asset: asset)
 
@@ -111,6 +117,13 @@ def test_market_placement_uses_current_price(monkeypatch):
     assert req['action'] == TRADE_ACTION_DEAL
     assert req['type'] == ORDER_TYPE_SELL
     assert req['price'] == 1.20000  # bid corrente, non l'entry del segnale
+
+
+def test_volume_comes_from_risk_module(monkeypatch):
+    fake = use(monkeypatch, FakeMT5())
+    monkeypatch.setattr(executor, 'compute_lot', lambda signal, si, ai: 0.25)
+    execute(make_signal())
+    assert fake.sent_requests[0]['volume'] == 0.25
 
 
 def test_unknown_signal_type_fails_without_sending(monkeypatch):

@@ -13,6 +13,7 @@ from collections import namedtuple
 
 import mt5_client
 from config import load_config, get_mt5_setting
+from risk import compute_lot
 
 try:
 	import MetaTrader5 as mt5
@@ -74,11 +75,6 @@ RETRY_DELAY_SECONDS = 1.0
 
 # ----- Helper -----------------------------------------------------------
 
-def _lot_size():
-	"""Lotto fisso da config [mt5] LOT_SIZE (il sizing dinamico arriva col risk management)."""
-	return float(get_mt5_setting(load_config(), 'LOT_SIZE', default='0.01') or 0.01)
-
-
 def _deviation_points():
 	"""Slippage massimo in punti da config [mt5] DEVIATION_POINTS (default 30 = 3 pip a 5 cifre)."""
 	return int(get_mt5_setting(load_config(), 'DEVIATION_POINTS', default='30') or 30)
@@ -134,7 +130,7 @@ def _market_order_request(symbol, order_type, signal):
 	return {
 		'action': TRADE_ACTION_DEAL,
 		'symbol': symbol,
-		'volume': _lot_size(),
+		'volume': compute_lot(signal, mt5.symbol_info(symbol), mt5.account_info()),
 		'type': order_type,
 		'price': _market_price(symbol, order_type),
 		'sl': float(signal['sl'] or 0),
@@ -160,7 +156,7 @@ def _do_placement(signal):
 			return {
 				'action': TRADE_ACTION_PENDING,
 				'symbol': symbol,
-				'volume': _lot_size(),
+				'volume': compute_lot(signal, mt5.symbol_info(symbol), mt5.account_info()),
 				'type': order_type,
 				'price': float(signal['entry']),
 				'sl': float(signal['sl'] or 0),

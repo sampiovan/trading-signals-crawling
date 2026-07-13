@@ -11,9 +11,14 @@ REQUIRED_KEYS = {
 }
 
 
+def get_setting(config, section, key, default=''):
+	"""Legge una chiave opzionale da una sezione (che può anche non esistere)."""
+	return config.get(section, key, fallback=default).strip()
+
+
 def get_mt5_setting(config, key, default=''):
-	"""Legge una chiave opzionale della sezione [mt5] (assente nei config v1)."""
-	return config.get('mt5', key, fallback=default).strip()
+	"""Legge una chiave opzionale della sezione [mt5]."""
+	return get_setting(config, 'mt5', key, default=default)
 
 
 def _validate_config(parser, path):
