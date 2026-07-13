@@ -18,6 +18,9 @@ Ciclo di sviluppo **v2.0**: passaggio a MetaTrader 5 con esecuzione ordini diret
 - Lookup degli ordini sulle posizioni e sui pending live del conto (tolleranza pip-aware,
   best-match) al posto del registro CSV.
 - Notifica Telegram (Saved Messages) sui fallimenti definitivi di esecuzione.
+- Risk management: sezione `[risk]` con lotto fisso (default, parità v1) o sizing
+  `RISK_PERCENT` calcolato da equity, distanza SL e tick value del simbolo,
+  con normalizzazione sui limiti di volume del broker e fallback senza SL.
 
 ### Removed
 - Expert Advisor MQL4 e ponte CSV (`trading_signals.csv`, `order_registry.csv`):

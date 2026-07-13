@@ -97,7 +97,24 @@ CHANNEL_ENTITY = @nome_canale
 TERMINAL_PATH =
 ; suffisso simboli del broker (es. .m per EURUSD.m), vuoto se non usato
 SYMBOL_SUFFIX =
+; slippage massimo in punti (30 = 3 pip a 5 cifre)
+DEVIATION_POINTS = 30
+
+[risk]
+; FIXED = lotto fisso | RISK_PERCENT = sizing dal rischio per trade
+MODE = FIXED
+FIXED_LOT = 0.01
+RISK_PERCENT = 1.0
 ```
+
+### Gestione del rischio
+
+Il volume di ogni ordine è calcolato da [risk.py](crawler/risk.py):
+
+- **`MODE = FIXED`** (default): lotto fisso `FIXED_LOT`, come nella v1.
+- **`MODE = RISK_PERCENT`**: rischia al massimo `RISK_PERCENT`% dell'equity per trade — il lotto è calcolato dalla distanza dello Stop Loss e dal valore del tick del simbolo (`rischio / perdita-per-lotto-se-SL-colpito`). Se il segnale non ha SL, fallback su `FIXED_LOT` con warning nel log.
+
+In entrambi i casi il volume è normalizzato sui limiti del simbolo (min/max/step del broker).
 
 > ⚠️ `config.ini` contiene credenziali: non va mai committato (è già escluso dal `.gitignore`, insieme ai file `.session` di Telethon).
 
