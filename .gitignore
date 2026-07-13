@@ -7,9 +7,10 @@ config.ini
 logs/
 *.log
 
-# Output CSV generati a runtime
+# Output CSV e stato generati a runtime
 trading_signals.csv
 order_registry.csv
+crawler_state.json
 
 # Python
 __pycache__/
