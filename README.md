@@ -72,7 +72,7 @@ Il parser ([msg_parser.py](crawler/msg_parser.py)) riconosce questi tipi di mess
 
 - **Windows** (il package `MetaTrader5` è disponibile solo per Windows)
 - Python 3.9+
-- **MetaTrader 5** installato, in esecuzione e loggato su un conto **HEDGING** (i conti netting ammettono una sola posizione per simbolo e non sono supportati: il canale tiene più posizioni sullo stesso cambio — il crawler lo verifica all'avvio e si rifiuta di partire su conti netting)
+- **MetaTrader 5** installato, in esecuzione e loggato su un conto **HEDGING** (i conti netting ammettono una sola posizione per simbolo e non sono supportati: il canale tiene più posizioni sullo stesso cambio — il crawler lo verifica all'avvio e si rifiuta di partire su conti netting), con il pulsante **Algo Trading** della toolbar abilitato: se è spento il terminale rifiuta ogni ordine con retcode `10027 AutoTrading disabled by client` (i rifiuti vengono comunque notificati come alert, ma i segnali nel frattempo vanno persi)
 - Un account Telegram con API ID e API hash ([my.telegram.org](https://my.telegram.org))
 
 ## Installazione
@@ -127,11 +127,13 @@ cd crawler
 python main.py
 ```
 
-Al primo avvio Telethon chiede il numero di telefono e il codice di verifica, poi salva la sessione e i login successivi sono automatici. Il crawler logga su console e in `logs/crawler.log` (rotazione giornaliera, 30 giorni di retention).
+Al primo avvio Telethon chiede il numero di telefono e il codice di verifica, poi salva la sessione e i login successivi sono automatici. Il crawler logga su console e in `logs/crawler.log` (rotazione giornaliera, 30 giorni di retention). Tieni d'occhio le righe `Messaggio non riconosciuto come segnale di trading`: il provider a volte varia le diciture (es. "Livello di ingresso" al posto di "Prezzo di ingresso") — se il messaggio scartato era in realtà un segnale, è una nuova variante di formato da aggiungere al parser.
 
-Al riavvio il crawler **recupera i messaggi persi** durante il downtime: l'ID dell'ultimo messaggio processato è salvato in `crawler_state.json` e i messaggi successivi vengono riprocessati in ordine. Al primo avvio in assoluto lo storico del canale NON viene riprocessato.
+Al riavvio il crawler **recupera i messaggi persi** durante il downtime: l'ID dell'ultimo messaggio processato è salvato in `crawler_state.json` e i messaggi successivi vengono riprocessati in ordine. Al primo avvio in assoluto lo storico del canale NON viene riprocessato. Lo stato avanza anche sui messaggi non riconosciuti o falliti (il catch-up è deterministico, non ritenta): un segnale sfuggito — formato nuovo, Algo Trading spento, ecc. — va eventualmente riallineato **a mano** sul terminale.
 
 Ogni esecuzione fallita in modo definitivo (dopo i retry) viene **notificata nei tuoi Saved Messages** di Telegram.
+
+Dopo ogni aggiornamento del codice (`git pull`) il crawler va **riavviato**: il processo in esecuzione non ricarica i sorgenti.
 
 ### Esecuzione come servizio (Windows)
 
@@ -145,6 +147,12 @@ powershell -ExecutionPolicy Bypass -File scripts\uninstall-task.ps1
 
 La task parte al logon, esegue `crawler\main.py` col Python del venv e viene riavviata (fino a 10 volte, a distanza di 1 minuto) se il processo esce con errore. Stato con `Get-ScheduledTask TradingSignalsCrawler`, log in `crawler\logs\crawler.log`.
 
+Per riavviare il crawler (es. dopo un aggiornamento del codice):
+
+```powershell
+Stop-ScheduledTask TradingSignalsCrawler; Start-ScheduledTask TradingSignalsCrawler
+```
+
 ## Sviluppo
 
 ```bash
@@ -155,6 +163,8 @@ pytest          # unit test (parser, executor, lookup, config, stato)
 
 I test girano senza MetaTrader 5 installato (il modulo è stubbato) e anche in CI su Linux: la dipendenza `MetaTrader5` è marcata `sys_platform == 'win32'` e l'import è difensivo.
 
+Quando il canale introduce una variante di formato nei messaggi, il testo reale va aggiunto come fixture in `tests/test_msg_parser.py` insieme al fix della regex: i messaggi veri del canale sono la base di tutti i test del parser.
+
 ## Disclaimer
 
-Questo progetto è a scopo personale/didattico. Il trading automatico comporta rischi finanziari significativi: usa il sistema su un **conto demo** prima di qualsiasi utilizzo reale.
+Questo progetto è a scopo personale/didattico. Il trading automatico comporta rischi finanziari significativi: prima di qualsiasi utilizzo reale, lascia girare il sistema **qualche giorno su un conto demo col canale vero**, così da validare parsing e flusso live con i messaggi reali del provider senza rischio.
