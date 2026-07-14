@@ -33,6 +33,13 @@ MSG_OPEN = (
     "Prezzo di ingresso  1.12500"
 )
 
+# Variante reale osservata live il 2026-07-14 (msg id=341): "Livello" al posto di "Prezzo"
+MSG_OPEN_LIVELLO = (
+    "Ordine Sell  GBP/USD    Aperto\n"
+    "\n"
+    "Livello di ingresso   1.33900\n"
+)
+
 MSG_MODIFY = (
     "(BUY LIMIT EUR/USD) - MODIFICARE IL PREZZO DI INGRESSO DA 1.12500 A  1.13000"
     "  mantenendo uguale Stop loss e Take Profit 👍✅"
@@ -126,6 +133,30 @@ def test_open_without_registry_match_is_direct_market_order(monkeypatch):
     assert result['message_type'] == 'open'
     assert result['order_id'] == ''
     assert result['magic_number'].isdigit() and len(result['magic_number']) == 5
+
+
+def test_open_with_livello_di_ingresso_variant(monkeypatch):
+    calls = {}
+
+    def fake_lookup(asset, entry, signal_type):
+        calls['args'] = (asset, entry, signal_type)
+        return '123456', '54321'
+
+    monkeypatch.setattr(msg_parser, 'get_order_ticket', fake_lookup)
+    result = parse_order_open(MSG_OPEN_LIVELLO)
+
+    assert result is not None
+    assert calls['args'] == ('GBPUSD', '1.33900', 'SELL')
+    assert result['message_type'] == 'open'
+    assert result['signal_type'] == 'SELL'
+
+
+def test_open_livello_variant_via_dispatcher(monkeypatch):
+    monkeypatch.setattr(msg_parser, 'get_order_ticket', lambda *a: (None, None))
+    signals = parse_message(MSG_OPEN_LIVELLO)
+    assert len(signals) == 1
+    assert signals[0]['message_type'] == 'open'
+    assert signals[0]['order_id'] == ''  # nessun pending: ordine diretto a mercato
 
 
 # ----- parse_order_modify -----

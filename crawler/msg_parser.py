@@ -35,7 +35,8 @@ _PLACEMENT_RE = re.compile(
 	re.DOTALL
 )
 _OPEN_RE = re.compile(
-	r"(?i)Ordine\s+(BUY|SELL)\s+([A-Z]{3}/[A-Z]{3}).*?Aperto.*?Prezzo di ingresso\s+([\d\.]+)",
+	# Il canale alterna "Prezzo di ingresso" e "Livello di ingresso"
+	r"(?i)Ordine\s+(BUY|SELL)\s+([A-Z]{3}/[A-Z]{3}).*?Aperto.*?(?:Prezzo|Livello)\s+di\s+ingresso\s+([\d\.]+)",
 	re.DOTALL
 )
 
