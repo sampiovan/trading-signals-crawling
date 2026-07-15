@@ -2,13 +2,15 @@
 
 Tutte le modifiche rilevanti di questo progetto sono documentate in questo file.
 
-Il formato segue [Keep a Changelog](https://keepachangelog.com/it/1.1.0/) e il progetto aderisce al
+Il formato segue [Keep a Changelog](https://keepachangelog.com/it-IT/1.1.0/) e il progetto aderisce al
 [Semantic Versioning](https://semver.org/lang/it/).
 
 ## [Unreleased]
 
 In roadmap: **multi-canale** (impostazioni e rischio per canale) e **budget di perdita
 giornaliero** (5% del deposito iniziale, con stop delle aperture all'80% del budget).
+
+## [2.1.0] - 2026-07-16
 
 ### Added
 - Commenti degli ordini = prezzo di apertura del canale arrotondato al pip
@@ -92,6 +94,7 @@ comunicanti via CSV. Congelata nel tag `v1.0.0`; eventuali hotfix sul branch `re
 - Ordini a mercato inviati con prezzo 0 (rifiutati dal broker).
 - Matching nel registro con tolleranza fissa inadatta alle coppie JPY.
 
-[Unreleased]: https://github.com/sampiovan/trading-signals-crawling/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/sampiovan/trading-signals-crawling/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/sampiovan/trading-signals-crawling/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/sampiovan/trading-signals-crawling/compare/v1.0.0...v2.0.0
 [1.0.0]: https://github.com/sampiovan/trading-signals-crawling/releases/tag/v1.0.0
