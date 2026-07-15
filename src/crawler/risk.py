@@ -18,6 +18,19 @@ logger = logging.getLogger(__name__)
 
 MODE_FIXED = 'FIXED'
 MODE_RISK_PERCENT = 'RISK_PERCENT'
+MODE_BALANCE = 'BALANCE'
+
+# Deposito iniziale del conto, risolto all'avvio da main
+# (config INITIAL_DEPOSIT > stato persistito > balance al primo avvio)
+_initial_deposit = None
+
+
+def set_initial_deposit(value):
+	"""Imposta il deposito iniziale usato dalla modalità BALANCE."""
+	global _initial_deposit
+	_initial_deposit = float(value) if value else None
+	if _initial_deposit:
+		logger.info(f"Deposito iniziale per il sizing: {_initial_deposit:.2f}")
 
 
 def _risk_setting(key, default):
@@ -37,6 +50,42 @@ def normalize_volume(lot, symbol_info):
 	return round(lot, 2)
 
 
+def _balance_lot(signal, symbol_info, account_info, fixed_lot):
+	"""
+	MODE=BALANCE: LOT_PER_STEP lotti (default 0.01) ogni BALANCE_STEP
+	(default 1000, valuta del conto) di capitale DISPONIBILE, dove
+	disponibile = balance − (100 − AVAILABLE_PERCENT)% del deposito iniziale.
+
+	Usa il BALANCE (solo P/L realizzato, niente flottante): con deposito
+	100k e AVAILABLE_PERCENT=10, a balance 100k sono disponibili 10k
+	-> 0.10 lotti; i lotti seguono i profitti/perdite realizzati.
+	"""
+	if account_info is None or _initial_deposit is None:
+		logger.warning("MODE=BALANCE senza balance o deposito iniziale: fallback sul lotto fisso.")
+		return normalize_volume(fixed_lot, symbol_info)
+
+	available_percent = float(_risk_setting('AVAILABLE_PERCENT', '10') or 10)
+	step_balance = float(_risk_setting('BALANCE_STEP', '1000') or 1000)
+	lot_per_step = float(_risk_setting('LOT_PER_STEP', '0.01') or 0.01)
+
+	floor_capital = _initial_deposit * (1 - available_percent / 100.0)
+	available = max(0.0, account_info.balance - floor_capital)
+	steps = math.floor(available / step_balance + 1e-9)
+	lot = steps * lot_per_step
+
+	if steps <= 0:
+		logger.warning(
+			f"MODE=BALANCE: capitale disponibile {available:.2f} sotto il primo scalino "
+			f"({step_balance:.0f}): uso il volume minimo del simbolo."
+		)
+	normalized = normalize_volume(lot, symbol_info)
+	logger.info(
+		f"Sizing BALANCE {signal['asset']}: balance {account_info.balance:.2f}, "
+		f"disponibile {available:.2f} -> lotto {normalized}"
+	)
+	return normalized
+
+
 def compute_lot(signal, symbol_info, account_info):
 	"""
 	Restituisce il volume da usare per l'ordine del segnale.
@@ -49,6 +98,9 @@ def compute_lot(signal, symbol_info, account_info):
 	"""
 	fixed_lot = float(_risk_setting('FIXED_LOT', '0.01') or 0.01)
 	mode = _risk_setting('MODE', MODE_FIXED).upper() or MODE_FIXED
+
+	if mode == MODE_BALANCE:
+		return _balance_lot(signal, symbol_info, account_info, fixed_lot)
 
 	if mode != MODE_RISK_PERCENT:
 		if mode != MODE_FIXED:
