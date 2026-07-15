@@ -26,11 +26,11 @@ Terminale MetaTrader 5 (conto HEDGING)
 Fallimento definitivo ──► notifica nei Saved Messages di Telegram
 ```
 
-Rispetto alla v1 non esiste più un registro ordini su file: quando un messaggio cita un ordine per prezzo (es. "CHIUDERE … (1.12500)"), il crawler lo cerca **tra le posizioni e i pending reali del conto** ([order_lookup.py](crawler/order_lookup.py)), con tolleranza pip-aware e best-match.
+Rispetto alla v1 non esiste più un registro ordini su file: quando un messaggio cita un ordine per prezzo (es. "CHIUDERE … (1.12500)"), il crawler lo cerca **tra le posizioni e i pending reali del conto** ([order_lookup.py](src/crawler/order_lookup.py)), con tolleranza pip-aware e best-match.
 
 ### Tipi di messaggio riconosciuti
 
-Il parser ([msg_parser.py](crawler/msg_parser.py)) riconosce questi tipi di messaggio:
+Il parser ([msg_parser.py](src/crawler/msg_parser.py)) riconosce questi tipi di messaggio:
 
 | Tipo (`message_type`) | Significato | Esempio di messaggio |
 |---|---|---|
@@ -50,21 +50,21 @@ Il parser ([msg_parser.py](crawler/msg_parser.py)) riconosce questi tipi di mess
 
 ```
 .
-├── crawler/                  # Package Python
-│   ├── main.py               # Entry point: Telegram, catch-up, pipeline di esecuzione
+├── src/crawler/              # Package Python (layout src, installabile con pip)
+│   ├── main.py               # Entry point: CLI, Telegram, catch-up, pipeline di esecuzione
+│   ├── __main__.py           # Avvio con `python -m crawler`
 │   ├── config.py             # Caricamento e validazione di config.ini
 │   ├── crawler_state.py      # Stato: ultimo messaggio processato (per il catch-up)
 │   ├── executor.py           # Esecuzione dei segnali su MT5 (order_send + retry)
 │   ├── mt5_client.py         # Connessione al terminale, check hedging, simboli
 │   ├── log_setup.py          # Logging (file con rotazione + console)
 │   ├── msg_parser.py         # Riconoscimento dei messaggi via regex
-│   ├── order_lookup.py       # Matching segnale → ticket sulle posizioni live
-│   └── utils.py              # Generazione del magic number
+│   └── order_lookup.py       # Matching segnale → ticket sulle posizioni live
 ├── scripts/                  # Install/uninstall del servizio Windows
 ├── tests/                    # Unit test (pytest)
 ├── CHANGELOG.md
 ├── config.example.ini
-├── requirements.txt / requirements-dev.txt
+├── pyproject.toml            # Metadati, dipendenze ed entry point (PEP 621)
 └── README.md
 ```
 
@@ -80,10 +80,10 @@ Il parser ([msg_parser.py](crawler/msg_parser.py)) riconosce questi tipi di mess
 ```bash
 python -m venv .venv
 .venv\Scripts\activate
-pip install -r requirements.txt
+pip install -e .
 ```
 
-Copia `config.example.ini` in `config.ini` (nella cartella `crawler/`) e compila i valori:
+Copia `config.example.ini` in `config.ini` (nella root del progetto, o dove preferisci: il percorso si passa con `--config`) e compila i valori:
 
 ```ini
 [telegram]
@@ -109,7 +109,7 @@ RISK_PERCENT = 1.0
 
 ### Gestione del rischio
 
-Il volume di ogni ordine è calcolato da [risk.py](crawler/risk.py):
+Il volume di ogni ordine è calcolato da [risk.py](src/crawler/risk.py):
 
 - **`MODE = FIXED`** (default): lotto fisso `FIXED_LOT`, come nella v1.
 - **`MODE = RISK_PERCENT`**: rischia al massimo `RISK_PERCENT`% dell'equity per trade — il lotto è calcolato dalla distanza dello Stop Loss e dal valore del tick del simbolo (`rischio / perdita-per-lotto-se-SL-colpito`). Se il segnale non ha SL, fallback su `FIXED_LOT` con warning nel log.
@@ -123,9 +123,12 @@ In entrambi i casi il volume è normalizzato sui limiti del simbolo (min/max/ste
 Con il terminale MT5 aperto e loggato sul conto:
 
 ```bash
-cd crawler
-python main.py
+signals-crawler                       # config.ini nella directory corrente
+signals-crawler --config C:\percorso\config.ini
+python -m crawler                     # equivalente
 ```
+
+Tutti i file di runtime — sessione Telegram, `crawler_state.json`, `logs/` — vengono creati **accanto al file di config**, quindi il comando funziona da qualsiasi directory.
 
 Al primo avvio Telethon chiede il numero di telefono e il codice di verifica, poi salva la sessione e i login successivi sono automatici. Il crawler logga su console e in `logs/crawler.log` (rotazione giornaliera, 30 giorni di retention). Tieni d'occhio le righe `Messaggio non riconosciuto come segnale di trading`: il provider a volte varia le diciture (es. "Livello di ingresso" al posto di "Prezzo di ingresso") — se il messaggio scartato era in realtà un segnale, è una nuova variante di formato da aggiungere al parser.
 
@@ -145,7 +148,7 @@ powershell -ExecutionPolicy Bypass -File scripts\install-task.ps1
 powershell -ExecutionPolicy Bypass -File scripts\uninstall-task.ps1
 ```
 
-La task parte al logon, esegue `crawler\main.py` col Python del venv e viene riavviata (fino a 10 volte, a distanza di 1 minuto) se il processo esce con errore. Stato con `Get-ScheduledTask TradingSignalsCrawler`, log in `crawler\logs\crawler.log`.
+La task parte al logon, esegue `python -m crawler --config <path>` col Python del venv (default: `config.ini` nella root del progetto, personalizzabile con `-ConfigPath`) e viene riavviata (fino a 10 volte, a distanza di 1 minuto) se il processo esce con errore. Stato con `Get-ScheduledTask TradingSignalsCrawler`, log in `logs\crawler.log` accanto al config.
 
 Per riavviare il crawler (es. dopo un aggiornamento del codice):
 
@@ -156,7 +159,7 @@ Stop-ScheduledTask TradingSignalsCrawler; Start-ScheduledTask TradingSignalsCraw
 ## Sviluppo
 
 ```bash
-pip install -r requirements-dev.txt
+pip install -e ".[dev]"
 ruff check .    # lint
 pytest          # unit test (parser, executor, lookup, config, stato)
 ```

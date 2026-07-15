@@ -9,6 +9,16 @@ Il formato segue [Keep a Changelog](https://keepachangelog.com/it/1.1.0/) e il p
 
 Prossimo ciclo: **v2.1** — gestione di più canali Telegram (impostazioni e rischio per canale).
 
+### Changed
+- Layout `src/` con import assoluti (`crawler.*`) e packaging PEP 621 completo:
+  installazione con `pip install -e .`, dipendenze in `pyproject.toml`
+  (rimossi `requirements.txt`/`requirements-dev.txt`), entry point `signals-crawler`
+  e supporto a `python -m crawler`.
+- Nuovo argomento `--config`: sessione Telegram, stato del catch-up e log vengono
+  creati accanto al file di config — nessuna dipendenza dalla working directory.
+- `install-task.ps1` aggiornato al nuovo avvio (`python -m crawler --config <path>`,
+  parametro `-ConfigPath`).
+
 ## [2.0.0] - 2026-07-15
 
 Passaggio a **MetaTrader 5** con esecuzione ordini diretta da Python (package ufficiale
