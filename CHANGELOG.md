@@ -7,7 +7,20 @@ Il formato segue [Keep a Changelog](https://keepachangelog.com/it/1.1.0/) e il p
 
 ## [Unreleased]
 
-Prossimo ciclo: **v2.1** — gestione di più canali Telegram (impostazioni e rischio per canale).
+In roadmap: **multi-canale** (impostazioni e rischio per canale) e **budget di perdita
+giornaliero** (5% del deposito iniziale, con stop delle aperture all'80% del budget).
+
+### Added
+- Commenti degli ordini = prezzo di apertura del canale arrotondato al pip
+  ("@1.3390", "@145.50" per JPY): identificatore stabile del segnale, usato anche
+  dal lookup; sulla modifica di un pending l'ordine viene ricreato per aggiornare
+  il commento (MT5 non permette di cambiarlo con la modify).
+- Sizing `MODE=BALANCE`: 0.01 lotti ogni 1000 (valuta del conto) di capitale
+  disponibile (= balance − 90% del deposito iniziale); deposito da config o
+  rilevato al primo avvio e persistito.
+- Guardia delle posizioni in perdita: oltre `CUT_LOSS` (default 125, esclusi
+  swap/commissioni) la posizione viene chiusa e riaperta con stessi SL/TP/volume,
+  accumulando nel commento la perdita realizzata: "@1.3390 (-120)".
 
 ### Changed
 - Layout `src/` con import assoluti (`crawler.*`) e packaging PEP 621 completo:
