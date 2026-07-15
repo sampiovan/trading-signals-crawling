@@ -156,6 +156,31 @@ def _market_order_request(symbol, order_type, signal):
 	}
 
 
+def open_market(symbol, order_type, volume, sl, tp, magic, comment):
+	"""
+	Apre una posizione a mercato con parametri ESPLICITI (volume, SL/TP,
+	magic e commento già decisi dal chiamante). Usata dalla guardia
+	posizioni per riaprire un trade tagliato mantenendo il commento
+	del segnale con la perdita cumulata.
+	"""
+	def build():
+		return {
+			'action': TRADE_ACTION_DEAL,
+			'symbol': symbol,
+			'volume': volume,
+			'type': order_type,
+			'price': _market_price(symbol, order_type),
+			'sl': sl,
+			'tp': tp,
+			'deviation': _deviation_points(),
+			'magic': magic,
+			'comment': comment,
+			'type_time': ORDER_TIME_GTC,
+			'type_filling': _filling_mode(symbol),
+		}
+	return _send_with_retry(build)
+
+
 # ----- Handler per message_type -----------------------------------------
 
 def _do_placement(signal):
