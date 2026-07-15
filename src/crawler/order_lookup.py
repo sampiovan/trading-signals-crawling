@@ -8,6 +8,7 @@ prezzi non aggiornati dopo le modify, ecc.).
 import logging
 
 from crawler import mt5_client
+from crawler.comments import format_price_comment, parse_comment
 
 try:
 	import MetaTrader5 as mt5
@@ -63,22 +64,40 @@ def get_order_ticket(asset, entry, signal_type, tol_pips=2):
 		logger.warning(f"Lookup: simbolo non risolvibile per asset {target_asset}.")
 		return None, None
 
+	# Il commento "@prezzo" è l'identificatore stabile del segnale: dopo un
+	# cut&reopen della guardia il price_open reale diverge dal prezzo del
+	# canale, ma il commento lo conserva.
+	try:
+		target_comment_price = format_price_comment(target_asset, entry).lstrip('@')
+	except (TypeError, ValueError):
+		target_comment_price = None
+
 	# Posizioni a mercato e ordini pendenti sono entrambi candidati:
 	# i messaggi del canale citano gli uni e gli altri per prezzo.
 	candidates = []
 	for pos in (mt5.positions_get(symbol=symbol) or ()):
-		candidates.append((pos.ticket, pos.magic, pos.price_open, _MT5_TYPE_TO_SIGNAL.get(pos.type, '')))
+		candidates.append((pos.ticket, pos.magic, pos.price_open,
+		                   _MT5_TYPE_TO_SIGNAL.get(pos.type, ''), getattr(pos, 'comment', '')))
 	for order in (mt5.orders_get(symbol=symbol) or ()):
-		candidates.append((order.ticket, order.magic, order.price_open, _MT5_TYPE_TO_SIGNAL.get(order.type, '')))
+		candidates.append((order.ticket, order.magic, order.price_open,
+		                   _MT5_TYPE_TO_SIGNAL.get(order.type, ''), getattr(order, 'comment', '')))
 
 	best = None
 	best_distance = None
-	for ticket, magic, price_open, candidate_signal in candidates:
+	for ticket, magic, price_open, candidate_signal, comment in candidates:
 		# I messaggi di chiusura non indicano il tipo: confronta solo se presente
 		if target_signal and candidate_signal != target_signal:
 			continue
-		distance = abs(price_open - target_entry)
-		if distance < tol and (best_distance is None or distance < best_distance):
+
+		parsed = parse_comment(comment)
+		if parsed and target_comment_price and parsed[0] == target_comment_price:
+			distance = -1.0		# match per commento: vince su qualsiasi match per prezzo
+		else:
+			distance = abs(price_open - target_entry)
+			if distance >= tol:
+				continue
+
+		if best_distance is None or distance < best_distance:
 			best = (ticket, magic)
 			best_distance = distance
 

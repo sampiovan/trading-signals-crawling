@@ -12,6 +12,7 @@ import logging
 from collections import namedtuple
 
 from crawler import mt5_client
+from crawler.comments import format_price_comment
 from crawler.config import load_config, get_mt5_setting
 from crawler.risk import compute_lot
 
@@ -96,6 +97,18 @@ def _market_price(symbol, order_type):
 	return tick.ask if order_type == ORDER_TYPE_BUY else tick.bid
 
 
+def _signal_comment(signal):
+	"""
+	Commento dell'ordine: il prezzo di apertura INVIATO DAL CANALE
+	("@1.3390"), mai il prezzo di fill. È l'identificatore stabile del
+	segnale usato anche dal lookup (vedi comments.py).
+	"""
+	try:
+		return format_price_comment(signal['asset'], signal['entry'])
+	except (TypeError, ValueError):
+		return ''
+
+
 def _send_with_retry(build_request):
 	"""
 	Invia una richiesta di trading con retry sui retcode transitori.
@@ -137,7 +150,7 @@ def _market_order_request(symbol, order_type, signal):
 		'tp': float(signal['tp'] or 0),
 		'deviation': _deviation_points(),
 		'magic': int(signal['magic_number'] or 0),
-		'comment': signal['message_type'],
+		'comment': _signal_comment(signal),
 		'type_time': ORDER_TIME_GTC,
 		'type_filling': _filling_mode(symbol),
 	}
@@ -162,7 +175,7 @@ def _do_placement(signal):
 				'sl': float(signal['sl'] or 0),
 				'tp': float(signal['tp'] or 0),
 				'magic': int(signal['magic_number'] or 0),
-				'comment': 'placement',
+				'comment': _signal_comment(signal),
 				'type_time': ORDER_TIME_GTC,
 				'type_filling': _filling_mode(symbol),
 			}
@@ -205,19 +218,40 @@ def _do_modify(signal):
 
 	orders = mt5.orders_get(ticket=ticket)
 	if orders:
-		# Pending: modifica del prezzo (0 = invariato, come in v1)
+		# Pending: MT5 non permette di cambiare il commento con una MODIFY,
+		# ma il commento deve riflettere il nuovo prezzo del canale.
+		# Sequenza: REMOVE del pending + nuovo PENDING con prezzo, SL/TP
+		# fusi (0 = invariato) e commento "@nuovo-prezzo".
 		order = orders[0]
+		new_price = entry if entry > 0 else order.price_open
+		new_sl = sl if sl > 0 else order.sl
+		new_tp = tp if tp > 0 else order.tp
+
+		removed = _send_with_retry(lambda: {'action': TRADE_ACTION_REMOVE, 'order': ticket})
+		if not removed.ok:
+			return removed
 
 		def build():
 			return {
-				'action': TRADE_ACTION_MODIFY,
-				'order': ticket,
-				'price': entry if entry > 0 else order.price_open,
-				'sl': sl if sl > 0 else order.sl,
-				'tp': tp if tp > 0 else order.tp,
+				'action': TRADE_ACTION_PENDING,
+				'symbol': order.symbol,
+				'volume': order.volume_current,
+				'type': order.type,
+				'price': new_price,
+				'sl': new_sl,
+				'tp': new_tp,
+				'magic': order.magic,
+				'comment': format_price_comment(signal['asset'], new_price),
 				'type_time': ORDER_TIME_GTC,
+				'type_filling': _filling_mode(order.symbol),
 			}
-		return _send_with_retry(build)
+		outcome = _send_with_retry(build)
+		if not outcome.ok:
+			# Il pending è stato rimosso ma non ripiazzato: serve intervento manuale
+			return Outcome(False, ticket, outcome.retcode,
+			               f"CRITICO: pending {ticket} rimosso ma ripiazzo fallito "
+			               f"({outcome.message}) — ripiazzare a mano a {new_price}")
+		return outcome
 
 	positions = mt5.positions_get(ticket=ticket)
 	if positions:
@@ -292,7 +326,6 @@ def _do_close(signal):
 			'price': _market_price(pos.symbol, close_type),
 			'deviation': _deviation_points(),
 			'magic': pos.magic,
-			'comment': 'close',
 			'type_time': ORDER_TIME_GTC,
 			'type_filling': _filling_mode(pos.symbol),
 		}
