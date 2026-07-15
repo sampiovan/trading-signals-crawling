@@ -14,7 +14,6 @@ quelle manuali o di altri sistemi sono ignorate.
 """
 import asyncio
 import logging
-from datetime import datetime, timedelta
 
 from crawler import executor
 from crawler.comments import parse_comment, format_loss_comment
@@ -26,6 +25,8 @@ except ImportError:	# pragma: no cover - dipende dalla piattaforma
 	mt5 = None
 
 logger = logging.getLogger(__name__)
+
+DEAL_ENTRY_OUT = 1	# ENUM_DEAL_ENTRY: deal di uscita (chiusura della posizione)
 
 
 def _guard_setting(key, default):
@@ -40,23 +41,27 @@ async def _alert(client, text):
 		logger.exception("Impossibile inviare l'alert Telegram della guardia.")
 
 
-async def _realized_loss(ticket):
+async def _realized_loss(ticket, estimate):
 	"""
 	P/L realizzato della posizione chiusa dai suoi deal in history:
 	somma di profit + swap + commission (include i costi di apertura e
-	chiusura). Il deal di chiusura può impiegare qualche istante ad
-	apparire in history: breve polling.
+	chiusura). history_deals_get va chiamata SENZA date: passandole
+	insieme a position= il package ignora il filtro e restituisce tutti
+	i deal del conto (deposito incluso). Il deal di chiusura può
+	impiegare qualche istante ad apparire in history: breve polling;
+	se non arriva, fallback sulla stima catturata al momento del taglio.
 	"""
-	date_from = datetime(2020, 1, 1)
-	date_to = datetime.now() + timedelta(days=1)
 	for _ in range(10):
-		deals = mt5.history_deals_get(date_from, date_to, position=ticket)
-		if deals and len(deals) >= 2:	# deal di apertura + almeno uno di chiusura
+		deals = [d for d in (mt5.history_deals_get(position=ticket) or ())
+		         if getattr(d, 'position_id', None) == ticket]
+		if any(getattr(d, 'entry', None) == DEAL_ENTRY_OUT for d in deals):
 			return sum(d.profit + d.swap + getattr(d, 'commission', 0.0) for d in deals)
 		await asyncio.sleep(0.3)
-	logger.warning(f"Guardia: deal di chiusura non ancora in history per {ticket}, perdita stimata dai deal disponibili.")
-	deals = mt5.history_deals_get(date_from, date_to, position=ticket) or ()
-	return sum(d.profit + d.swap + getattr(d, 'commission', 0.0) for d in deals)
+	logger.warning(
+		f"Guardia: deal di chiusura non in history per {ticket}, "
+		f"perdita stimata dalla posizione al momento del taglio ({estimate:.2f})."
+	)
+	return estimate
 
 
 async def _cut_and_reopen(client, pos, parsed, cut_loss):
@@ -75,8 +80,9 @@ async def _cut_and_reopen(client, pos, parsed, cut_loss):
 		await _alert(client, f"Taglio FALLITO su {pos.symbol} ticket {pos.ticket}: {closed.message}")
 		return
 
-	# Perdita realizzata (con swap e commissioni), cumulata con i tagli precedenti
-	realized = await _realized_loss(pos.ticket)
+	# Perdita realizzata (con swap e commissioni), cumulata con i tagli
+	# precedenti; la stima dalla posizione è il fallback se la history tarda
+	realized = await _realized_loss(pos.ticket, pos.profit + getattr(pos, 'swap', 0.0))
 	loss_amount = max(0, round(-realized))
 	cumulative = prev_loss + loss_amount
 	comment = format_loss_comment(price_str, cumulative)
