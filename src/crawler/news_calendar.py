@@ -69,7 +69,9 @@ def _save_cache(cache, path):
 
 
 def _fetch_feed():
-	with urllib.request.urlopen(FEED_URL, timeout=30) as resp:
+	# Lo User-Agent di default di urllib viene rifiutato dal feed (403)
+	req = urllib.request.Request(FEED_URL, headers={'User-Agent': 'Mozilla/5.0 (signals-crawler)'})
+	with urllib.request.urlopen(req, timeout=30) as resp:
 		return json.loads(resp.read().decode('utf-8'))
 
 
