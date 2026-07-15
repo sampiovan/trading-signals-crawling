@@ -112,3 +112,66 @@ def test_risk_percent_with_broken_symbol_data_falls_back(monkeypatch):
     broken = SimpleNamespace(volume_min=0.01, volume_max=50.0, volume_step=0.01,
                              trade_tick_size=0.00001, trade_tick_value=0.0)
     assert compute_lot(make_signal(), broken, ACCOUNT) == 0.03
+
+
+# ----- MODE=BALANCE -----
+
+BALANCE_KEYS = {'MODE': 'BALANCE', 'FIXED_LOT': '0.01', 'AVAILABLE_PERCENT': '10',
+                'BALANCE_STEP': '1000', 'LOT_PER_STEP': '0.01'}
+
+
+def account_with(balance):
+    return SimpleNamespace(equity=balance, balance=balance)
+
+
+@pytest.fixture
+def balance_mode(monkeypatch):
+    monkeypatch.setattr(risk, 'load_config', lambda: None)
+    monkeypatch.setattr(risk, 'get_setting',
+                        lambda cfg, section, key, default='': BALANCE_KEYS.get(key, default))
+    risk.set_initial_deposit(100000.0)
+    yield
+    risk.set_initial_deposit(None)
+
+
+def test_balance_full_deposit(balance_mode):
+    # balance 100k, deposito 100k, 10% disponibile -> 10k -> 0.10 lotti
+    assert compute_lot(make_signal(), EURUSD, account_with(100000.0)) == 0.10
+
+
+def test_balance_follows_realized_losses(balance_mode):
+    # balance sceso a 95k -> disponibile 5k -> 0.05
+    assert compute_lot(make_signal(), EURUSD, account_with(95000.0)) == 0.05
+
+
+def test_balance_follows_realized_profits(balance_mode):
+    # balance 101.5k -> disponibile 11.5k -> floor a 11 scalini -> 0.11
+    assert compute_lot(make_signal(), EURUSD, account_with(101500.0)) == 0.11
+
+
+def test_balance_below_first_step_uses_volume_min(balance_mode):
+    # disponibile 500 (sotto il primo scalino) e perfino negativo:
+    # clamp al volume minimo del simbolo, mai zero
+    assert compute_lot(make_signal(), EURUSD, account_with(90500.0)) == 0.01
+    assert compute_lot(make_signal(), EURUSD, account_with(85000.0)) == 0.01
+
+
+def test_balance_without_initial_deposit_falls_back(monkeypatch):
+    monkeypatch.setattr(risk, 'load_config', lambda: None)
+    monkeypatch.setattr(risk, 'get_setting',
+                        lambda cfg, section, key, default='': BALANCE_KEYS.get(key, default))
+    risk.set_initial_deposit(None)
+    assert compute_lot(make_signal(), EURUSD, account_with(100000.0)) == 0.01  # FIXED_LOT
+
+
+def test_balance_custom_step_and_lot(monkeypatch):
+    keys = dict(BALANCE_KEYS, BALANCE_STEP='2000', LOT_PER_STEP='0.02')
+    monkeypatch.setattr(risk, 'load_config', lambda: None)
+    monkeypatch.setattr(risk, 'get_setting',
+                        lambda cfg, section, key, default='': keys.get(key, default))
+    risk.set_initial_deposit(100000.0)
+    try:
+        # disponibile 10k / 2000 = 5 scalini * 0.02 = 0.10
+        assert compute_lot(make_signal(), EURUSD, account_with(100000.0)) == 0.10
+    finally:
+        risk.set_initial_deposit(None)

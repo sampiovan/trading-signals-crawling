@@ -9,7 +9,6 @@ from crawler.executor import (
     TRADE_ACTION_DEAL,
     TRADE_ACTION_PENDING,
     TRADE_ACTION_SLTP,
-    TRADE_ACTION_MODIFY,
     TRADE_ACTION_REMOVE,
     ORDER_TYPE_BUY,
     ORDER_TYPE_SELL,
@@ -63,8 +62,11 @@ def position(ticket=555, symbol="EURUSD", ptype=ORDER_TYPE_BUY, sl=0.0, tp=1.30,
                            volume=volume, magic=magic)
 
 
-def pending(ticket=666, price_open=1.10, sl=1.05, tp=1.30):
-    return SimpleNamespace(ticket=ticket, price_open=price_open, sl=sl, tp=tp)
+def pending(ticket=666, price_open=1.10, sl=1.05, tp=1.30, symbol="EURUSD",
+            volume_current=0.05, otype=2, magic=54321):
+    return SimpleNamespace(ticket=ticket, price_open=price_open, sl=sl, tp=tp,
+                           symbol=symbol, volume_current=volume_current,
+                           type=otype, magic=magic)
 
 
 def make_signal(**overrides):
@@ -106,6 +108,15 @@ def test_pending_placement(monkeypatch):
     assert req['price'] == 1.125
     assert req['sl'] == 1.085 and req['tp'] == 1.2
     assert req['magic'] == 54321
+    assert req['comment'] == '@1.1250'  # prezzo del canale, pip-rounded
+
+
+def test_market_comment_is_channel_price_not_fill(monkeypatch):
+    fake = use(monkeypatch, FakeMT5())
+    execute(make_signal(signal_type='SELL', entry='1.34121'))
+    req = fake.sent_requests[0]
+    assert req['price'] == 1.20000          # fill al prezzo corrente...
+    assert req['comment'] == '@1.3412'      # ...ma il commento resta quello del canale
 
 
 def test_market_placement_uses_current_price(monkeypatch):
@@ -162,15 +173,31 @@ def test_open_direct_market_order(monkeypatch):
 
 # ----- modify -----
 
-def test_modify_pending_changes_price_keeps_unset_sltp(monkeypatch):
-    fake = use(monkeypatch, FakeMT5(orders=[pending(ticket=666, sl=1.05, tp=1.30)]))
+def test_modify_pending_removes_and_replaces_with_new_comment(monkeypatch):
+    # MT5 non permette di cambiare il commento con la MODIFY: la modifica
+    # di un pending è remove + re-place con commento "@nuovo-prezzo"
+    fake = use(monkeypatch, FakeMT5(send_results=[result(RETCODE_DONE), result(RETCODE_DONE, order=888)],
+                                    orders=[pending(ticket=666, sl=1.05, tp=1.30)]))
     outcome = execute(make_signal(message_type='modify', order_id='666',
                                   entry='1.13000', sl=0, tp=0))
     assert outcome.ok
-    req = fake.sent_requests[0]
-    assert req['action'] == TRADE_ACTION_MODIFY
-    assert req['price'] == 1.13
-    assert req['sl'] == 1.05 and req['tp'] == 1.30  # 0 = invariato
+    remove_req, place_req = fake.sent_requests
+    assert remove_req == {'action': TRADE_ACTION_REMOVE, 'order': 666}
+    assert place_req['action'] == TRADE_ACTION_PENDING
+    assert place_req['price'] == 1.13
+    assert place_req['sl'] == 1.05 and place_req['tp'] == 1.30  # 0 = invariato
+    assert place_req['volume'] == 0.05 and place_req['magic'] == 54321  # ereditati dal pending
+    assert place_req['comment'] == '@1.1300'  # commento aggiornato al nuovo prezzo
+
+
+def test_modify_pending_replace_failure_is_critical(monkeypatch):
+    # Remove riuscito ma re-place respinto: outcome critico (serve intervento manuale)
+    fake = use(monkeypatch, FakeMT5(send_results=[result(RETCODE_DONE), result(10019, comment="no money")],
+                                    orders=[pending(ticket=666)]))
+    outcome = execute(make_signal(message_type='modify', order_id='666', entry='1.13000', sl=0, tp=0))
+    assert not outcome.ok
+    assert 'CRITICO' in outcome.message
+    assert len(fake.sent_requests) == 2
 
 
 def test_modify_position_sets_sl_only(monkeypatch):

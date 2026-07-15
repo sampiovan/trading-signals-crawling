@@ -9,9 +9,9 @@ from crawler.order_lookup import get_order_ticket, pip_size
 BUY, SELL, BUY_LIMIT, SELL_LIMIT = 0, 1, 2, 3
 
 
-def position(ticket, symbol, price_open, ptype=BUY, magic=11111):
+def position(ticket, symbol, price_open, ptype=BUY, magic=11111, comment=''):
     return SimpleNamespace(ticket=ticket, symbol=symbol, price_open=price_open,
-                           type=ptype, magic=magic)
+                           type=ptype, magic=magic, comment=comment)
 
 
 class FakeMT5:
@@ -90,6 +90,25 @@ def test_lookup_filters_by_signal_type(monkeypatch):
 def test_lookup_filters_by_symbol(monkeypatch):
     use(monkeypatch, FakeMT5(positions=[position(1, "EURUSD", 1.12500, BUY)]))
     assert get_order_ticket("GBPUSD", "1.12500", "BUY") == (None, None)
+
+
+def test_lookup_matches_reopened_position_by_comment(monkeypatch):
+    # Dopo un cut&reopen il price_open reale è LONTANO dal prezzo del canale,
+    # ma il commento "@prezzo" lo conserva: il lookup deve ritrovarla
+    use(monkeypatch, FakeMT5(positions=[
+        position(900010, "GBPUSD", 1.32100, SELL, 55555, comment="@1.3390 (-120)"),
+    ]))
+    assert get_order_ticket("GBPUSD", "1.33900", "SELL") == ("900010", "55555")
+
+
+def test_lookup_comment_match_beats_price_match(monkeypatch):
+    # Una posizione col prezzo "giusto" ma commento diverso NON deve vincere
+    # su quella riaperta che porta il commento del segnale
+    use(monkeypatch, FakeMT5(positions=[
+        position(1, "EURUSD", 1.12500, BUY, 11111, comment="@1.1300"),
+        position(2, "EURUSD", 1.19000, BUY, 22222, comment="@1.1250 (-80)"),
+    ]))
+    assert get_order_ticket("EURUSD", "1.12500", "BUY") == ("2", "22222")
 
 
 def test_lookup_unresolvable_symbol_returns_none(monkeypatch):

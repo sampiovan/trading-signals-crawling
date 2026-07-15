@@ -26,7 +26,7 @@ Terminale MetaTrader 5 (conto HEDGING)
 Fallimento definitivo ──► notifica nei Saved Messages di Telegram
 ```
 
-Rispetto alla v1 non esiste più un registro ordini su file: quando un messaggio cita un ordine per prezzo (es. "CHIUDERE … (1.12500)"), il crawler lo cerca **tra le posizioni e i pending reali del conto** ([order_lookup.py](src/crawler/order_lookup.py)), con tolleranza pip-aware e best-match.
+Rispetto alla v1 non esiste più un registro ordini su file: quando un messaggio cita un ordine per prezzo (es. "CHIUDERE … (1.12500)"), il crawler lo cerca **tra le posizioni e i pending reali del conto** ([order_lookup.py](src/crawler/order_lookup.py)), con tolleranza pip-aware e best-match — e tramite il **commento dell'ordine**, che contiene il prezzo di apertura inviato dal canale arrotondato al pip (`@1.3390`, `@145.50` per le coppie JPY). Il commento è l'identificatore stabile del segnale: non cambia se il fill avviene a un livello diverso e sopravvive ai tagli/riaperture della guardia posizioni, dove accumula anche la perdita realizzata (`@1.3390 (-120)`). Sulla modifica del prezzo di un pending, il commento viene aggiornato ricreando l'ordine (MT5 non permette di cambiare il commento con una semplice modify).
 
 ### Tipi di messaggio riconosciuti
 
@@ -101,20 +101,36 @@ SYMBOL_SUFFIX =
 DEVIATION_POINTS = 30
 
 [risk]
-; FIXED = lotto fisso | RISK_PERCENT = sizing dal rischio per trade
-MODE = FIXED
+; FIXED = lotto fisso | RISK_PERCENT = rischio % per trade | BALANCE = scalini sul balance
+MODE = BALANCE
 FIXED_LOT = 0.01
 RISK_PERCENT = 1.0
+; deposito iniziale: vuoto = rilevato dal balance al primo avvio e persistito
+INITIAL_DEPOSIT =
+AVAILABLE_PERCENT = 10
+BALANCE_STEP = 1000
+LOT_PER_STEP = 0.01
+
+[guard]
+; guardia delle posizioni in perdita: taglio e riapertura immediata
+ENABLED = true
+CUT_LOSS = 125
+INTERVAL_SECONDS = 15
 ```
 
 ### Gestione del rischio
 
 Il volume di ogni ordine è calcolato da [risk.py](src/crawler/risk.py):
 
-- **`MODE = FIXED`** (default): lotto fisso `FIXED_LOT`, come nella v1.
+- **`MODE = BALANCE`**: `LOT_PER_STEP` lotti (default 0.01) ogni `BALANCE_STEP` (default 1000, valuta del conto) di capitale **disponibile**, dove disponibile = balance − (100 − `AVAILABLE_PERCENT`)% del deposito iniziale. Con deposito 100k e il 10% disponibile: a balance 100k → 0.10 lotti; i lotti seguono solo i profitti/perdite **realizzati** (balance, niente flottante). Il deposito iniziale viene da `INITIAL_DEPOSIT` in config oppure, se vuoto, è rilevato dal balance al primo avvio e persistito in `crawler_state.json`.
+- **`MODE = FIXED`**: lotto fisso `FIXED_LOT`, come nella v1.
 - **`MODE = RISK_PERCENT`**: rischia al massimo `RISK_PERCENT`% dell'equity per trade — il lotto è calcolato dalla distanza dello Stop Loss e dal valore del tick del simbolo (`rischio / perdita-per-lotto-se-SL-colpito`). Se il segnale non ha SL, fallback su `FIXED_LOT` con warning nel log.
 
-In entrambi i casi il volume è normalizzato sui limiti del simbolo (min/max/step del broker).
+In tutti i casi il volume è normalizzato sui limiti del simbolo (min/max/step del broker).
+
+### Guardia delle posizioni in perdita
+
+Un controllo periodico ([position_guard.py](src/crawler/position_guard.py), ogni `INTERVAL_SECONDS`) sorveglia le posizioni aperte dal crawler (riconosciute dal commento `@prezzo`): quando la **perdita di prezzo** di una posizione supera `CUT_LOSS` (valuta del conto, esclusi swap e commissioni), la posizione viene **chiusa e riaperta immediatamente** a mercato con stessi direzione, volume, SL, TP e magic number. Il commento della nuova posizione conserva il prezzo originale del canale e accumula la perdita realizzata — inclusi swap e commissioni, arrotondata agli interi: `@1.3390 (-120)`, poi `@1.3390 (-245)` a un secondo taglio. I segnali successivi del canale (chiusura, move SL) ritrovano la posizione riaperta proprio grazie al commento. Le posizioni manuali o di altri sistemi non vengono mai toccate. Se la riapertura fallisce, arriva un alert nei Saved Messages con i dati per riaprire a mano.
 
 > ⚠️ `config.ini` contiene credenziali: non va mai committato (è già escluso dal `.gitignore`, insieme ai file `.session` di Telethon).
 

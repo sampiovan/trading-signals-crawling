@@ -5,11 +5,17 @@ import logging
 import argparse
 from telethon import TelegramClient, events
 
-from crawler import executor, mt5_client
-from crawler.config import load_config
-from crawler.crawler_state import load_last_message_id, save_last_message_id
+from crawler import executor, mt5_client, risk
+from crawler.config import load_config, get_setting
+from crawler.crawler_state import (
+	load_last_message_id,
+	save_last_message_id,
+	load_initial_deposit,
+	save_initial_deposit,
+)
 from crawler.log_setup import setup_logger
 from crawler.msg_parser import parse_message, OrderNotFoundException
+from crawler.position_guard import run_guard
 
 logger = logging.getLogger("crawler")
 
@@ -70,6 +76,27 @@ async def process_message(client, message, state_path):
 	save_last_message_id(message.id, path=state_path)
 
 
+def resolve_initial_deposit(config, state_path, account):
+	"""
+	Deposito iniziale per il sizing MODE=BALANCE, in ordine di precedenza:
+	config [risk] INITIAL_DEPOSIT > stato persistito > balance attuale
+	(rilevato al primo avvio e salvato, così non cambia ai riavvii).
+	"""
+	configured = get_setting(config, 'risk', 'INITIAL_DEPOSIT')
+	if configured:
+		logger.info(f"Deposito iniziale da config: {configured}")
+		return float(configured)
+
+	stored = load_initial_deposit(path=state_path)
+	if stored is not None:
+		logger.info(f"Deposito iniziale dallo stato persistito: {stored}")
+		return stored
+
+	save_initial_deposit(account.balance, path=state_path)
+	logger.info(f"Primo avvio: deposito iniziale rilevato dal balance ({account.balance}) e salvato.")
+	return float(account.balance)
+
+
 async def catch_up(client, channel, state_path):
 	"""
 	Recupera e processa i messaggi arrivati mentre il crawler era offline.
@@ -115,7 +142,8 @@ async def main(config_path):
 
 	# Connessione a MT5 PRIMA di tutto: se il terminale non c'è o il conto
 	# non è hedging è inutile mettersi in ascolto dei segnali.
-	mt5_client.connect()
+	account = mt5_client.connect()
+	risk.set_initial_deposit(resolve_initial_deposit(config, state_path, account))
 
 	try:
 		# Crea il client Telegram utilizzando le credenziali dal config
@@ -137,9 +165,15 @@ async def main(config_path):
 		async def handler(event):
 			await process_message(client, event.message, state_path)
 
+		# Guardia delle posizioni in perdita (cut & reopen), in parallelo
+		guard_task = asyncio.create_task(run_guard(client))
+
 		logger.info("In ascolto dei nuovi messaggi... (premi Ctrl+C per terminare)")
-		# Rimane in attesa indefinitamente
-		await client.run_until_disconnected()
+		try:
+			# Rimane in attesa indefinitamente
+			await client.run_until_disconnected()
+		finally:
+			guard_task.cancel()
 	finally:
 		mt5_client.shutdown()
 
