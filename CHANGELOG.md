@@ -7,8 +7,13 @@ Il formato segue [Keep a Changelog](https://keepachangelog.com/it/1.1.0/) e il p
 
 ## [Unreleased]
 
-Ciclo di sviluppo **v2.0**: passaggio a MetaTrader 5 con esecuzione ordini diretta da Python
-(package ufficiale `MetaTrader5`), eliminazione dell'Expert Advisor e del ponte CSV.
+Prossimo ciclo: **v2.1** — gestione di più canali Telegram (impostazioni e rischio per canale).
+
+## [2.0.0] - 2026-07-15
+
+Passaggio a **MetaTrader 5** con esecuzione ordini diretta da Python (package ufficiale
+`MetaTrader5`): eliminati l'Expert Advisor e il ponte CSV. Collaudata end-to-end su conto
+demo hedging (12/12 operazioni: pending, modify, cancel, market, move SL multiplo, close).
 
 ### Added
 - Executor MT5: esecuzione diretta dei segnali via `order_send` con esito sincrono,
@@ -21,6 +26,10 @@ Ciclo di sviluppo **v2.0**: passaggio a MetaTrader 5 con esecuzione ordini diret
 - Risk management: sezione `[risk]` con lotto fisso (default, parità v1) o sizing
   `RISK_PERCENT` calcolato da equity, distanza SL e tick value del simbolo,
   con normalizzazione sui limiti di volume del broker e fallback senza SL.
+
+### Fixed
+- Riconosciuta la variante "Livello di ingresso" (oltre a "Prezzo di ingresso") nei
+  messaggi di apertura, emersa dall'esercizio live.
 
 ### Removed
 - Expert Advisor MQL4 e ponte CSV (`trading_signals.csv`, `order_registry.csv`):
@@ -49,5 +58,6 @@ comunicanti via CSV. Congelata nel tag `v1.0.0`; eventuali hotfix sul branch `re
 - Ordini a mercato inviati con prezzo 0 (rifiutati dal broker).
 - Matching nel registro con tolleranza fissa inadatta alle coppie JPY.
 
-[Unreleased]: https://github.com/sampiovan/trading-signals-crawling/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/sampiovan/trading-signals-crawling/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/sampiovan/trading-signals-crawling/compare/v1.0.0...v2.0.0
 [1.0.0]: https://github.com/sampiovan/trading-signals-crawling/releases/tag/v1.0.0
