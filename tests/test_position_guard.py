@@ -120,6 +120,38 @@ def test_foreign_positions_are_ignored(monkeypatch):
     assert fake.sent_requests == []
 
 
+# ----- adozione delle posizioni senza commento del crawler -----
+
+@pytest.mark.parametrize("comment,magic", [
+    ("placement", 54321),   # legacy del vecchio executor
+    ("open", 54321),        # legacy del vecchio executor
+    ("", 0),                # manuale senza commento
+])
+def test_adopts_positions_without_crawler_comment(monkeypatch, comment, magic):
+    fake = use(monkeypatch, FakeMT5(
+        positions=[position(profit=-130.0, comment=comment, magic=magic, price_open=1.3415)],
+        deals=[deal(entry=ENTRY_IN), deal(profit=-130.0)]))
+    run(check_positions_once(FakeClient()))
+    # Riaperta col prezzo di apertura reale adottato come prezzo del commento
+    assert fake.sent_requests[1]['comment'] == '@1.3415 (-130)'
+    assert fake.sent_requests[1]['magic'] == magic
+
+
+def test_adopted_jpy_price_uses_two_decimals(monkeypatch):
+    fake = use(monkeypatch, FakeMT5(
+        positions=[position(symbol="USDJPY", profit=-130.0, comment="placement",
+                            price_open=145.503)],
+        deals=[deal(entry=ENTRY_IN), deal(profit=-130.0)]))
+    run(check_positions_once(FakeClient()))
+    assert fake.sent_requests[1]['comment'] == '@145.50 (-130)'
+
+
+def test_adoptable_position_above_threshold_is_left_alone(monkeypatch):
+    fake = use(monkeypatch, FakeMT5(positions=[position(profit=-80.0, comment="placement")]))
+    run(check_positions_once(FakeClient()))
+    assert fake.sent_requests == []
+
+
 # ----- cut & reopen -----
 
 def test_cut_and_reopen_flow(monkeypatch):
