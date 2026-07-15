@@ -116,6 +116,10 @@ LOT_PER_STEP = 0.01
 ENABLED = true
 CUT_LOSS = 125
 INTERVAL_SECONDS = 15
+; anti-churn: età minima, cooldown per simbolo, filtro spread
+MIN_AGE_SECONDS = 60
+COOLDOWN_SECONDS = 300
+SPREAD_FACTOR = 2
 ```
 
 ### Gestione del rischio
@@ -131,6 +135,8 @@ In tutti i casi il volume è normalizzato sui limiti del simbolo (min/max/step d
 ### Guardia delle posizioni in perdita
 
 Un controllo periodico ([position_guard.py](src/crawler/position_guard.py), ogni `INTERVAL_SECONDS`) sorveglia le posizioni aperte dal crawler (riconosciute dal commento `@prezzo`): quando la **perdita di prezzo** di una posizione supera `CUT_LOSS` (valuta del conto, esclusi swap e commissioni), la posizione viene **chiusa e riaperta immediatamente** a mercato con stessi direzione, volume, SL, TP e magic number. Il commento della nuova posizione conserva il prezzo originale del canale e accumula la perdita realizzata — inclusi swap e commissioni, arrotondata agli interi: `@1.3390 (-120)`, poi `@1.3390 (-245)` a un secondo taglio. I segnali successivi del canale (chiusura, move SL) ritrovano la posizione riaperta proprio grazie al commento. La guardia **adotta** anche le posizioni legacy del vecchio executor (commento `placement`/`open`) e quelle senza commento (es. aperte a mano): al primo taglio il loro prezzo di apertura reale diventa il prezzo del commento e la riaperta nasce già nel formato `@prezzo (-N)`. Le posizioni con commenti di altri sistemi non vengono mai toccate. Se la riapertura fallisce, arriva un alert nei Saved Messages con i dati per riaprire a mano.
+
+Tre protezioni **anti-churn** evitano il ciclo di tagli/riaperture nei momenti di spread largo (una posizione appena aperta parte già in perdita dello spread, e ogni riapertura lo ripaga): le posizioni più giovani di `MIN_AGE_SECONDS` non vengono toccate; dopo un taglio il simbolo resta in cooldown per `COOLDOWN_SECONDS`; il taglio è rinviato (con warning nel log) finché `CUT_LOSS` non supera `SPREAD_FACTOR` volte il costo corrente dello spread per il volume della posizione. Età e cooldown sono misurati in tempo server del broker, non con l'orologio locale; ogni protezione si disattiva col valore `0`.
 
 > ⚠️ `config.ini` contiene credenziali: non va mai committato (è già escluso dal `.gitignore`, insieme ai file `.session` di Telethon).
 

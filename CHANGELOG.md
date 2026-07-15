@@ -10,6 +10,14 @@ Il formato segue [Keep a Changelog](https://keepachangelog.com/it-IT/1.1.0/) e i
 In roadmap: **multi-canale** (impostazioni e rischio per canale) e **budget di perdita
 giornaliero** (5% del deposito iniziale, con stop delle aperture all'80% del budget).
 
+### Added
+- Guardia anti-churn: con spread largo una posizione appena aperta parte già in
+  perdita dello spread e il taglio immediato innescherebbe un ciclo di
+  chiusure/riaperture. Tre protezioni in `[guard]`: età minima della posizione
+  (`MIN_AGE_SECONDS`), cooldown per simbolo dopo un taglio (`COOLDOWN_SECONDS`)
+  e rinvio del taglio finché `CUT_LOSS` non supera `SPREAD_FACTOR` volte il
+  costo corrente dello spread.
+
 ## [2.1.0] - 2026-07-16
 
 ### Added

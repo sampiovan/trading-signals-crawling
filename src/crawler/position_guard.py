@@ -15,6 +15,16 @@ e quelle senza commento (es. aperte a mano): al primo taglio il loro
 prezzo di apertura reale diventa il prezzo del commento e la riaperta
 nasce già nel formato nuovo. Le posizioni con commenti di altri sistemi
 sono ignorate.
+
+Anti-churn: una posizione appena aperta parte già in perdita dello
+spread e, quando lo spread è largo (volatilità, notizie), tagliarla
+innescherebbe un ciclo di chiusure/riaperture che paga lo spread a ogni
+giro. Tre protezioni ([guard] in config): le posizioni più giovani di
+MIN_AGE_SECONDS non vengono toccate; dopo un taglio il SIMBOLO è in
+cooldown per COOLDOWN_SECONDS (il ticket cambia a ogni riaperta); il
+taglio è rinviato finché CUT_LOSS non supera SPREAD_FACTOR volte il
+costo corrente dello spread. Età e cooldown sono confrontati in tempo
+SERVER (pos.time e tick.time), mai con l'orologio locale.
 """
 import asyncio
 import logging
@@ -34,6 +44,9 @@ DEAL_ENTRY_OUT = 1	# ENUM_DEAL_ENTRY: deal di uscita (chiusura della posizione)
 
 # Commenti scritti dal vecchio executor (pre-commenti "@prezzo")
 LEGACY_COMMENTS = frozenset({'placement', 'open'})
+
+# Ultimo taglio per simbolo, in tempo server (epoch del broker)
+_last_cut_at = {}
 
 
 def _guard_setting(key, default):
@@ -130,18 +143,49 @@ def _parse_or_adopt(pos):
 	return parse_comment(format_price_comment(pos.symbol, pos.price_open))
 
 
+def _spread_cost(tick, sym_info, volume):
+	"""Costo dello spread in valuta del conto per il volume dato (0 se non calcolabile)."""
+	tick_size = getattr(sym_info, 'trade_tick_size', 0) or 0
+	tick_value = getattr(sym_info, 'trade_tick_value', 0) or 0
+	if tick_size <= 0 or tick_value <= 0:
+		return 0.0
+	return (tick.ask - tick.bid) / tick_size * tick_value * volume
+
+
 async def check_positions_once(client):
 	"""Un passaggio della guardia su tutte le posizioni aperte."""
 	cut_loss = float(_guard_setting('CUT_LOSS', '125') or 125)
+	min_age = float(_guard_setting('MIN_AGE_SECONDS', '60') or 0)
+	cooldown = float(_guard_setting('COOLDOWN_SECONDS', '300') or 0)
+	spread_factor = float(_guard_setting('SPREAD_FACTOR', '2') or 0)
 
 	for pos in (mt5.positions_get() or ()):
 		# Trigger sulla sola perdita di prezzo (esclusi swap/commissioni)
 		if pos.profit > -cut_loss:
 			continue
+		tick = mt5.symbol_info_tick(pos.symbol)
+		if tick is None:
+			logger.warning(f"Guardia: nessun tick per {pos.symbol}, taglio rinviato.")
+			continue
+		# Anti-churn: età minima e cooldown per simbolo, in tempo server
+		if tick.time - getattr(pos, 'time', 0) < min_age:
+			continue
+		if tick.time - _last_cut_at.get(pos.symbol, 0) < cooldown:
+			continue
 		parsed = _parse_or_adopt(pos)
 		if parsed is None:
 			continue
+		# Anti-churn: con la soglia troppo vicina al costo dello spread la
+		# riaperta rientrerebbe subito in zona taglio: rinvia finché rientra
+		cost = _spread_cost(tick, mt5.symbol_info(pos.symbol), pos.volume)
+		if cost > 0 and cut_loss <= spread_factor * cost:
+			logger.warning(
+				f"Guardia: spread su {pos.symbol} costa {cost:.2f} e la soglia "
+				f"{cut_loss:.0f} non supera {spread_factor:g}x: taglio rinviato."
+			)
+			continue
 		await _cut_and_reopen(client, pos, parsed, cut_loss)
+		_last_cut_at[pos.symbol] = tick.time
 
 
 async def run_guard(client):

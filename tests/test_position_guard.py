@@ -22,16 +22,21 @@ def deal(profit=0.0, swap=0.0, commission=0.0, entry=ENTRY_OUT, position_id=555)
                            entry=entry, position_id=position_id)
 
 
+SERVER_NOW = 100_000  # "adesso" in tempo server (epoch del broker) negli stub
+
+
 def position(ticket=555, symbol="EURUSD", ptype=SELL, profit=-130.0, volume=0.10,
              sl=1.36, tp=1.30, magic=54321, comment="@1.3390", price_open=1.3390,
-             swap=0.0):
+             swap=0.0, time=SERVER_NOW - 10_000):
     return SimpleNamespace(ticket=ticket, symbol=symbol, type=ptype, profit=profit,
                            volume=volume, sl=sl, tp=tp, magic=magic, comment=comment,
-                           price_open=price_open, swap=swap)
+                           price_open=price_open, swap=swap, time=time)
 
 
 class FakeMT5:
-    def __init__(self, positions=(), deals=(), send_results=None, deals_sequence=None):
+    def __init__(self, positions=(), deals=(), send_results=None, deals_sequence=None,
+                 tick=None):
+        self._tick = tick or SimpleNamespace(ask=1.20010, bid=1.20000, time=SERVER_NOW)
         self._positions = list(positions)
         # deals_sequence: una tupla di deal per ogni chiamata a history_deals_get
         # (l'ultima si ripete); simula il deal di chiusura che tarda ad apparire.
@@ -60,7 +65,7 @@ class FakeMT5:
                                volume_step=0.01, trade_tick_size=0.00001, trade_tick_value=1.0)
 
     def symbol_info_tick(self, symbol):
-        return SimpleNamespace(ask=1.20010, bid=1.20000)
+        return self._tick
 
     def account_info(self):
         return SimpleNamespace(equity=100000.0, balance=100000.0)
@@ -93,6 +98,7 @@ def wire_stub(monkeypatch):
     async def no_sleep(_seconds):
         pass
     monkeypatch.setattr(position_guard.asyncio, 'sleep', no_sleep)
+    position_guard._last_cut_at.clear()
 
 
 def use(monkeypatch, fake):
@@ -116,6 +122,82 @@ def test_position_above_threshold_is_left_alone(monkeypatch):
 def test_foreign_positions_are_ignored(monkeypatch):
     # Perdita profonda ma commento non nostro: la guardia non la tocca
     fake = use(monkeypatch, FakeMT5(positions=[position(profit=-500.0, comment="trade manuale")]))
+    run(check_positions_once(FakeClient()))
+    assert fake.sent_requests == []
+
+
+# ----- anti-churn: età minima, cooldown per simbolo, filtro spread -----
+
+def test_young_position_is_left_alone(monkeypatch):
+    # Aperta da 10s (< MIN_AGE_SECONDS=60): parte in perdita dello spread
+    # ma la guardia non la tocca — il caso del loop con spread alto
+    fake = use(monkeypatch, FakeMT5(
+        positions=[position(profit=-130.0, time=SERVER_NOW - 10)]))
+    run(check_positions_once(FakeClient()))
+    assert fake.sent_requests == []
+
+
+def test_symbol_cooldown_blocks_immediate_recut(monkeypatch):
+    fake = use(monkeypatch, FakeMT5(
+        positions=[position(profit=-130.0)],
+        deals=[deal(entry=ENTRY_IN), deal(profit=-130.0)]))
+    client = FakeClient()
+    run(check_positions_once(client))
+    assert len(fake.sent_requests) == 2  # taglio + riaperta
+    # Stessa posizione ancora in perdita al passaggio dopo: cooldown attivo
+    run(check_positions_once(client))
+    assert len(fake.sent_requests) == 2
+
+
+def test_expired_cooldown_allows_cut(monkeypatch):
+    position_guard._last_cut_at['EURUSD'] = SERVER_NOW - 301  # oltre i 300s di default
+    fake = use(monkeypatch, FakeMT5(
+        positions=[position(profit=-130.0)],
+        deals=[deal(entry=ENTRY_IN), deal(profit=-130.0)]))
+    run(check_positions_once(FakeClient()))
+    assert len(fake.sent_requests) == 2
+
+
+def test_cooldown_is_per_symbol(monkeypatch):
+    position_guard._last_cut_at['GBPUSD'] = SERVER_NOW  # appena tagliato ALTRO simbolo
+    fake = use(monkeypatch, FakeMT5(
+        positions=[position(symbol="EURUSD", profit=-130.0)],
+        deals=[deal(entry=ENTRY_IN), deal(profit=-130.0)]))
+    run(check_positions_once(FakeClient()))
+    assert len(fake.sent_requests) == 2
+
+
+def test_wide_spread_defers_cut(monkeypatch):
+    # Spread 0.01 su 0.10 lotti -> costo 100; CUT_LOSS 125 <= 2x100: rinviato
+    fake = use(monkeypatch, FakeMT5(
+        positions=[position(profit=-130.0)],
+        tick=SimpleNamespace(ask=1.2100, bid=1.2000, time=SERVER_NOW)))
+    run(check_positions_once(FakeClient()))
+    assert fake.sent_requests == []
+
+
+def test_unreadable_spread_does_not_block_cut(monkeypatch):
+    # trade_tick_size a 0 (broker che non lo espone): il filtro spread si
+    # disattiva da solo e il taglio procede come prima
+    class NoTickSizeMT5(FakeMT5):
+        def symbol_info(self, symbol):
+            si = super().symbol_info(symbol)
+            si.trade_tick_size = 0.0
+            return si
+
+    fake = use(monkeypatch, NoTickSizeMT5(
+        positions=[position(profit=-130.0)],
+        deals=[deal(entry=ENTRY_IN), deal(profit=-130.0)]))
+    run(check_positions_once(FakeClient()))
+    assert len(fake.sent_requests) == 2
+
+
+def test_missing_tick_defers_cut(monkeypatch):
+    class NoTickMT5(FakeMT5):
+        def symbol_info_tick(self, symbol):
+            return None
+
+    fake = use(monkeypatch, NoTickMT5(positions=[position(profit=-130.0)]))
     run(check_positions_once(FakeClient()))
     assert fake.sent_requests == []
 
