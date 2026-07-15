@@ -25,11 +25,17 @@ cooldown per COOLDOWN_SECONDS (il ticket cambia a ogni riaperta); il
 taglio è rinviato finché CUT_LOSS non supera SPREAD_FACTOR volte il
 costo corrente dello spread. Età e cooldown sono confrontati in tempo
 SERVER (pos.time e tick.time), mai con l'orologio locale.
+
+Blackout notizie (NEWS_BLACKOUT): i tagli sono sospesi nella finestra di
+±NEWS_BLACKOUT_MINUTES attorno agli eventi ad alto impatto sulle valute
+del simbolo (calendario gratuito di Forex Factory, vedi news_calendar).
+Ferma SOLO i tagli della guardia: le aperture da segnale del canale non
+vengono mai bloccate.
 """
 import asyncio
 import logging
 
-from crawler import executor
+from crawler import executor, news_calendar
 from crawler.comments import parse_comment, format_loss_comment, format_price_comment
 from crawler.config import load_config, get_setting
 
@@ -49,8 +55,15 @@ LEGACY_COMMENTS = frozenset({'placement', 'open'})
 _last_cut_at = {}
 
 
+_TRUE_VALUES = ('true', '1', 'yes', 'si', 'sì')
+
+
 def _guard_setting(key, default):
 	return get_setting(load_config(), 'guard', key, default=default)
+
+
+def _guard_flag(key, default):
+	return _guard_setting(key, default).lower() in _TRUE_VALUES
 
 
 async def _alert(client, text):
@@ -158,6 +171,8 @@ async def check_positions_once(client):
 	min_age = float(_guard_setting('MIN_AGE_SECONDS', '60') or 0)
 	cooldown = float(_guard_setting('COOLDOWN_SECONDS', '300') or 0)
 	spread_factor = float(_guard_setting('SPREAD_FACTOR', '2') or 0)
+	news_blackout = _guard_flag('NEWS_BLACKOUT', 'true')
+	news_minutes = float(_guard_setting('NEWS_BLACKOUT_MINUTES', '30') or 0)
 
 	for pos in (mt5.positions_get() or ()):
 		# Trigger sulla sola perdita di prezzo (esclusi swap/commissioni)
@@ -184,14 +199,23 @@ async def check_positions_once(client):
 				f"{cut_loss:.0f} non supera {spread_factor:g}x: taglio rinviato."
 			)
 			continue
+		# Blackout notizie: niente tagli a ridosso degli eventi ad alto
+		# impatto sulle valute del simbolo (spread e volatilità anomali)
+		if news_blackout:
+			event = news_calendar.in_blackout(pos.symbol, news_minutes)
+			if event is not None:
+				logger.warning(
+					f"Guardia: blackout notizie su {pos.symbol} "
+					f"({event['country']} {event['title']}): taglio rinviato."
+				)
+				continue
 		await _cut_and_reopen(client, pos, parsed, cut_loss)
 		_last_cut_at[pos.symbol] = tick.time
 
 
-async def run_guard(client):
+async def run_guard(client, news_cache_path=None):
 	"""Loop della guardia: un check ogni INTERVAL_SECONDS, robusto agli errori."""
-	enabled = _guard_setting('ENABLED', 'true').lower()
-	if enabled not in ('true', '1', 'yes', 'si', 'sì'):
+	if not _guard_flag('ENABLED', 'true'):
 		logger.info("Guardia posizioni disabilitata da config ([guard] ENABLED).")
 		return
 
@@ -199,8 +223,15 @@ async def run_guard(client):
 	cut_loss = _guard_setting('CUT_LOSS', '125')
 	logger.info(f"Guardia posizioni attiva: taglio a -{cut_loss}, check ogni {interval:.0f}s.")
 
+	news_enabled = _guard_flag('NEWS_BLACKOUT', 'true') and news_cache_path is not None
+	refresh_hours = float(_guard_setting('NEWS_REFRESH_HOURS', '6') or 6)
+
 	while True:
 		try:
+			if news_enabled:
+				# Bloccante (rete/disco): fuori dall'event loop. Internamente
+				# è un no-op finché la cache in memoria è fresca.
+				await asyncio.to_thread(news_calendar.refresh, news_cache_path, refresh_hours)
 			await check_positions_once(client)
 		except asyncio.CancelledError:
 			raise

@@ -1,9 +1,10 @@
 import asyncio
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
 
-from crawler import executor, mt5_client, position_guard
+from crawler import executor, mt5_client, news_calendar, position_guard
 from crawler.executor import TRADE_ACTION_DEAL, RETCODE_DONE
 from crawler.position_guard import check_positions_once
 
@@ -99,6 +100,7 @@ def wire_stub(monkeypatch):
         pass
     monkeypatch.setattr(position_guard.asyncio, 'sleep', no_sleep)
     position_guard._last_cut_at.clear()
+    monkeypatch.setattr(news_calendar, '_events', [])
 
 
 def use(monkeypatch, fake):
@@ -200,6 +202,41 @@ def test_missing_tick_defers_cut(monkeypatch):
     fake = use(monkeypatch, NoTickMT5(positions=[position(profit=-130.0)]))
     run(check_positions_once(FakeClient()))
     assert fake.sent_requests == []
+
+
+def _high_impact_event_now(country="USD"):
+    return {'title': 'CPI m/m', 'country': country,
+            'when': datetime.now(timezone.utc)}
+
+
+def test_news_blackout_defers_cut(monkeypatch):
+    monkeypatch.setattr(news_calendar, '_events', [_high_impact_event_now("USD")])
+    fake = use(monkeypatch, FakeMT5(
+        positions=[position(profit=-130.0)],  # EURUSD: USD in blackout
+        deals=[deal(entry=ENTRY_IN), deal(profit=-130.0)]))
+    run(check_positions_once(FakeClient()))
+    assert fake.sent_requests == []
+
+
+def test_news_blackout_on_unrelated_currency_cuts(monkeypatch):
+    monkeypatch.setattr(news_calendar, '_events', [_high_impact_event_now("CAD")])
+    fake = use(monkeypatch, FakeMT5(
+        positions=[position(profit=-130.0)],
+        deals=[deal(entry=ENTRY_IN), deal(profit=-130.0)]))
+    run(check_positions_once(FakeClient()))
+    assert len(fake.sent_requests) == 2
+
+
+def test_news_blackout_disabled_cuts(monkeypatch):
+    values = {'CUT_LOSS': '125', 'NEWS_BLACKOUT': 'false'}
+    monkeypatch.setattr(position_guard, 'get_setting',
+                        lambda cfg, section, key, default='': values.get(key, default))
+    monkeypatch.setattr(news_calendar, '_events', [_high_impact_event_now("USD")])
+    fake = use(monkeypatch, FakeMT5(
+        positions=[position(profit=-130.0)],
+        deals=[deal(entry=ENTRY_IN), deal(profit=-130.0)]))
+    run(check_positions_once(FakeClient()))
+    assert len(fake.sent_requests) == 2
 
 
 # ----- adozione delle posizioni senza commento del crawler -----

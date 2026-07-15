@@ -17,6 +17,11 @@ giornaliero** (5% del deposito iniziale, con stop delle aperture all'80% del bud
   (`MIN_AGE_SECONDS`), cooldown per simbolo dopo un taglio (`COOLDOWN_SECONDS`)
   e rinvio del taglio finché `CUT_LOSS` non supera `SPREAD_FACTOR` volte il
   costo corrente dello spread.
+- Blackout notizie: tagli della guardia sospesi per ±`NEWS_BLACKOUT_MINUTES`
+  attorno agli eventi ad alto impatto sulle valute del simbolo, dal calendario
+  settimanale gratuito di Forex Factory (cache in `news_calendar.json`, refresh
+  ogni `NEWS_REFRESH_HOURS` ore, fail-open senza feed né cache). Solo i tagli:
+  le aperture da segnale non vengono mai bloccate.
 
 ## [2.1.0] - 2026-07-16
 
