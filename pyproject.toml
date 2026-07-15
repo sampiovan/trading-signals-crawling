@@ -1,5 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trading-signals-crawler"
+description = "Copy-trading automatico: segnali da canale Telegram eseguiti direttamente su MetaTrader 5"
+readme = "README.md"
+requires-python = ">=3.9"
+dynamic = ["version"]
+dependencies = [
+    "telethon>=1.36",
+    "MetaTrader5>=5.0.45; sys_platform == 'win32'",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.0",
+    "ruff>=0.15",
+]
+
+[project.scripts]
+signals-crawler = "crawler.main:run"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+packages = ["crawler"]
+
+[tool.setuptools.dynamic]
+version = { attr = "crawler.__version__" }
+
 [tool.pytest.ini_options]
-pythonpath = ["crawler"]
 testpaths = ["tests"]
 
 [tool.ruff]

@@ -11,9 +11,9 @@ import time
 import logging
 from collections import namedtuple
 
-import mt5_client
-from config import load_config, get_mt5_setting
-from risk import compute_lot
+from crawler import mt5_client
+from crawler.config import load_config, get_mt5_setting
+from crawler.risk import compute_lot
 
 try:
 	import MetaTrader5 as mt5

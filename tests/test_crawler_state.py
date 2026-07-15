@@ -1,4 +1,4 @@
-from crawler_state import load_last_message_id, save_last_message_id
+from crawler.crawler_state import load_last_message_id, save_last_message_id
 
 
 def test_roundtrip(tmp_path):

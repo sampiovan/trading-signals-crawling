@@ -12,7 +12,7 @@ In ogni caso il volume viene normalizzato sui limiti del simbolo
 import math
 import logging
 
-from config import load_config, get_setting
+from crawler.config import load_config, get_setting
 
 logger = logging.getLogger(__name__)
 

@@ -1,28 +1,17 @@
+import os
 import sys
 import asyncio
+import logging
+import argparse
 from telethon import TelegramClient, events
 
-import executor
-import mt5_client
-from config import load_config
-from crawler_state import load_last_message_id, save_last_message_id
-from log_setup import setup_logger
-from msg_parser import parse_message, OrderNotFoundException
+from crawler import executor, mt5_client
+from crawler.config import load_config
+from crawler.crawler_state import load_last_message_id, save_last_message_id
+from crawler.log_setup import setup_logger
+from crawler.msg_parser import parse_message, OrderNotFoundException
 
-logger = setup_logger()
-
-
-# ----- Lettura del file di configurazione -----
-config = load_config()
-
-api_id = int(config['telegram']['YOUR_API_ID'])
-api_hash = config['telegram']['YOUR_API_HASH']
-
-# Nome della sessione: verrà creato un file "session_name.session" per salvare la sessione
-session_name = config['telegram']['SESSION_NAME']
-
-# Nome del canale (username o ID) da cui vuoi estrarre i messaggi
-channel_entity = config['telegram']['CHANNEL_ENTITY']
+logger = logging.getLogger("crawler")
 
 
 async def notify_failure(client, signal, outcome):
@@ -38,7 +27,7 @@ async def notify_failure(client, signal, outcome):
 		logger.exception("Impossibile inviare la notifica Telegram del fallimento.")
 
 
-async def process_message(client, message):
+async def process_message(client, message, state_path):
 	"""
 	Pipeline condivisa tra eventi live e catch-up: recupera l'eventuale
 	messaggio citato, riconosce i segnali, li ESEGUE su MT5 e aggiorna
@@ -78,22 +67,22 @@ async def process_message(client, message):
 			if not outcome.ok:
 				await notify_failure(client, signal, outcome)
 
-	save_last_message_id(message.id)
+	save_last_message_id(message.id, path=state_path)
 
 
-async def catch_up(client, channel):
+async def catch_up(client, channel, state_path):
 	"""
 	Recupera e processa i messaggi arrivati mentre il crawler era offline.
 	Al primo avvio (nessuno stato) non riprocessa lo storico del canale:
 	salva solo l'ID dell'ultimo messaggio come punto di partenza.
 	"""
-	last_id = load_last_message_id()
+	last_id = load_last_message_id(path=state_path)
 
 	if last_id is None:
 		# Primo avvio: inizializza lo stato all'ultimo messaggio del canale
 		# così i futuri riavvii sanno da dove riprendere.
 		async for message in client.iter_messages(channel, limit=1):
-			save_last_message_id(message.id)
+			save_last_message_id(message.id, path=state_path)
 			logger.info(f"Primo avvio: stato inizializzato all'ultimo messaggio del canale (id={message.id}).")
 		return
 
@@ -101,7 +90,7 @@ async def catch_up(client, channel):
 	# reverse=True: dal più vecchio al più recente, per rispettare l'ordine dei segnali
 	async for message in client.iter_messages(channel, min_id=last_id, reverse=True):
 		missed += 1
-		await process_message(client, message)
+		await process_message(client, message, state_path)
 
 	if missed:
 		logger.info(f"Catch-up completato: {missed} messaggi recuperati dal downtime.")
@@ -110,16 +99,27 @@ async def catch_up(client, channel):
 
 
 # ----- Funzione principale asincrona -----
-async def main():
-	logger.info("Avvio del crawler")
+async def main(config_path):
+	logger.info(f"Avvio del crawler (config: {config_path})")
+
+	# Tutti i percorsi di runtime (stato, sessione Telegram, log) vivono
+	# accanto al file di config: nessuna dipendenza dalla working directory.
+	config = load_config(config_path)
+	base_dir = os.path.dirname(config_path)
+	state_path = os.path.join(base_dir, 'crawler_state.json')
+
+	api_id = int(config['telegram']['YOUR_API_ID'])
+	api_hash = config['telegram']['YOUR_API_HASH']
+	session_path = os.path.join(base_dir, config['telegram']['SESSION_NAME'])
+	channel_entity = config['telegram']['CHANNEL_ENTITY']
 
 	# Connessione a MT5 PRIMA di tutto: se il terminale non c'è o il conto
 	# non è hedging è inutile mettersi in ascolto dei segnali.
 	mt5_client.connect()
 
 	try:
-		# Crea il client Telegram utilizzando le credenziali dal config.ini
-		client = TelegramClient(session_name, api_id, api_hash)
+		# Crea il client Telegram utilizzando le credenziali dal config
+		client = TelegramClient(session_path, api_id, api_hash)
 		await client.start()
 		logger.info("Client Telegram avviato.")
 
@@ -130,12 +130,12 @@ async def main():
 		# Recupera i messaggi persi PRIMA di registrare il handler live, per
 		# preservare l'ordine dei segnali (resta una finestra di pochi istanti
 		# tra catch-up e registrazione, trascurabile rispetto a ore di downtime).
-		await catch_up(client, channel)
+		await catch_up(client, channel, state_path)
 
 		# Registra un event handler per i nuovi messaggi nel canale
 		@client.on(events.NewMessage(chats=channel))
 		async def handler(event):
-			await process_message(client, event.message)
+			await process_message(client, event.message, state_path)
 
 		logger.info("In ascolto dei nuovi messaggi... (premi Ctrl+C per terminare)")
 		# Rimane in attesa indefinitamente
@@ -143,13 +143,32 @@ async def main():
 	finally:
 		mt5_client.shutdown()
 
-# ----- Avvia il loop principale -----
-if __name__ == '__main__':
+
+# ----- Entry point sincrono (console script e python -m crawler) -----
+def run():
+	parser = argparse.ArgumentParser(
+		prog='signals-crawler',
+		description="Esegue su MetaTrader 5 i segnali di trading di un canale Telegram."
+	)
+	parser.add_argument(
+		'--config', default='config.ini',
+		help="Percorso di config.ini (default: nella directory corrente). "
+		     "Stato, sessione Telegram e log vengono creati accanto al config."
+	)
+	args = parser.parse_args()
+
+	config_path = os.path.abspath(args.config)
+	setup_logger(logs_dir=os.path.join(os.path.dirname(config_path), 'logs'))
+
 	try:
-		asyncio.run(main())
+		asyncio.run(main(config_path))
 	except KeyboardInterrupt:
 		logger.info("Arresto da tastiera. Fine.")
 	except Exception:
 		logger.exception("Errore inaspettato durante l'esecuzione del crawler")
 		# Exit code != 0: permette alla Scheduled Task di riavviare il crawler
 		sys.exit(1)
+
+
+if __name__ == '__main__':
+	run()
