@@ -2,9 +2,9 @@ from types import SimpleNamespace
 
 import pytest
 
-import executor
-import mt5_client
-from executor import (
+from crawler import executor
+from crawler import mt5_client
+from crawler.executor import (
     execute,
     TRADE_ACTION_DEAL,
     TRADE_ACTION_PENDING,

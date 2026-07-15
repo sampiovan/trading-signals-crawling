@@ -2,8 +2,8 @@ from types import SimpleNamespace
 
 import pytest
 
-import risk
-from risk import compute_lot, normalize_volume
+from crawler import risk
+from crawler.risk import compute_lot, normalize_volume
 
 
 # EURUSD a 5 cifre: tick 0.00001 vale 1$ per lotto standard

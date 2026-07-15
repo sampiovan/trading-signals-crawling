@@ -2,12 +2,11 @@ import sys
 import asyncio
 from telethon import TelegramClient, events
 
-import executor
-import mt5_client
-from config import load_config
-from crawler_state import load_last_message_id, save_last_message_id
-from log_setup import setup_logger
-from msg_parser import parse_message, OrderNotFoundException
+from crawler import executor, mt5_client
+from crawler.config import load_config
+from crawler.crawler_state import load_last_message_id, save_last_message_id
+from crawler.log_setup import setup_logger
+from crawler.msg_parser import parse_message, OrderNotFoundException
 
 logger = setup_logger()
 
@@ -143,8 +142,8 @@ async def main():
 	finally:
 		mt5_client.shutdown()
 
-# ----- Avvia il loop principale -----
-if __name__ == '__main__':
+# ----- Entry point sincrono (console script e python -m crawler) -----
+def run():
 	try:
 		asyncio.run(main())
 	except KeyboardInterrupt:
@@ -153,3 +152,7 @@ if __name__ == '__main__':
 		logger.exception("Errore inaspettato durante l'esecuzione del crawler")
 		# Exit code != 0: permette alla Scheduled Task di riavviare il crawler
 		sys.exit(1)
+
+
+if __name__ == '__main__':
+	run()

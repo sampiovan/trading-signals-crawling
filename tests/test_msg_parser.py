@@ -1,7 +1,7 @@
 import pytest
 
-import msg_parser
-from msg_parser import (
+from crawler import msg_parser
+from crawler.msg_parser import (
     OrderNotFoundException,
     parse_message,
     parse_market_order,

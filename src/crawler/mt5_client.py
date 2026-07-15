@@ -9,7 +9,7 @@ il modulo si importa comunque e i test iniettano uno stub su
 """
 import logging
 
-from config import load_config, get_mt5_setting
+from crawler.config import load_config, get_mt5_setting
 
 try:
 	import MetaTrader5 as mt5

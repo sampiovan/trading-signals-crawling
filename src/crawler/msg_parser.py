@@ -11,12 +11,17 @@ I parser sono elencati (e definiti nel file) nell'ordine di dispatch:
 i pattern più specifici precedono quelli più generici.
 """
 import re
+import random
 import logging
 
-from order_lookup import get_order_ticket
-from utils import generate_magic
+from crawler.order_lookup import get_order_ticket
 
 logger = logging.getLogger(__name__)
+
+
+def generate_magic():
+	"""Genera un magic number casuale (stringa di 5 cifre) che identifica il segnale."""
+	return str(random.randint(10000, 99999))
 
 
 # Definiamo una eccezione personalizzata

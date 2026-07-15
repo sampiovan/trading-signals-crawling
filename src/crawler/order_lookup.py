@@ -7,7 +7,7 @@ prezzi non aggiornati dopo le modify, ecc.).
 """
 import logging
 
-import mt5_client
+from crawler import mt5_client
 
 try:
 	import MetaTrader5 as mt5

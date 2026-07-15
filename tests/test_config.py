@@ -1,7 +1,7 @@
 import pytest
 
-import config as config_module
-from config import load_config, reset_config, get_mt5_setting
+from crawler import config as config_module
+from crawler.config import load_config, reset_config, get_mt5_setting
 
 
 VALID_CONFIG = """
