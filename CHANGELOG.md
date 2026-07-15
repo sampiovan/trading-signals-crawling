@@ -21,6 +21,17 @@ giornaliero** (5% del deposito iniziale, con stop delle aperture all'80% del bud
 - Guardia delle posizioni in perdita: oltre `CUT_LOSS` (default 125, esclusi
   swap/commissioni) la posizione viene chiusa e riaperta con stessi SL/TP/volume,
   accumulando nel commento la perdita realizzata: "@1.3390 (-120)".
+- La guardia adotta anche le posizioni legacy del vecchio executor (commento
+  `placement`/`open`) e quelle senza commento (es. aperte a mano): al primo
+  taglio il prezzo di apertura reale diventa il prezzo del commento e la
+  riaperta migra al formato nuovo.
+
+### Fixed
+- Perdita realizzata della guardia sempre "(-0)": `history_deals_get` chiamata
+  con le date insieme a `position=` ignorava il filtro e sommava tutti i deal
+  del conto (deposito incluso). Ora la chiamata è senza date, con filtro su
+  `position_id`, attesa del deal di uscita e fallback sulla stima
+  profit+swap al momento del taglio.
 
 ### Changed
 - Layout `src/` con import assoluti (`crawler.*`) e packaging PEP 621 completo:

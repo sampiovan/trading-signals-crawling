@@ -14,20 +14,28 @@ def result(retcode, order=777, comment="done"):
     return SimpleNamespace(retcode=retcode, order=order, comment=comment)
 
 
-def deal(profit=0.0, swap=0.0, commission=0.0):
-    return SimpleNamespace(profit=profit, swap=swap, commission=commission)
+ENTRY_IN, ENTRY_OUT = 0, 1
+
+
+def deal(profit=0.0, swap=0.0, commission=0.0, entry=ENTRY_OUT, position_id=555):
+    return SimpleNamespace(profit=profit, swap=swap, commission=commission,
+                           entry=entry, position_id=position_id)
 
 
 def position(ticket=555, symbol="EURUSD", ptype=SELL, profit=-130.0, volume=0.10,
-             sl=1.36, tp=1.30, magic=54321, comment="@1.3390"):
+             sl=1.36, tp=1.30, magic=54321, comment="@1.3390", price_open=1.3390,
+             swap=0.0):
     return SimpleNamespace(ticket=ticket, symbol=symbol, type=ptype, profit=profit,
-                           volume=volume, sl=sl, tp=tp, magic=magic, comment=comment)
+                           volume=volume, sl=sl, tp=tp, magic=magic, comment=comment,
+                           price_open=price_open, swap=swap)
 
 
 class FakeMT5:
-    def __init__(self, positions=(), deals=(), send_results=None):
+    def __init__(self, positions=(), deals=(), send_results=None, deals_sequence=None):
         self._positions = list(positions)
-        self._deals = list(deals)
+        # deals_sequence: una tupla di deal per ogni chiamata a history_deals_get
+        # (l'ultima si ripete); simula il deal di chiusura che tarda ad apparire.
+        self._deals_seq = [list(step) for step in deals_sequence] if deals_sequence else [list(deals)]
         self.send_results = list(send_results if send_results is not None else [result(RETCODE_DONE)] * 4)
         self.sent_requests = []
 
@@ -38,8 +46,10 @@ class FakeMT5:
     def orders_get(self, ticket=None):
         return ()
 
-    def history_deals_get(self, date_from, date_to, position=None):
-        return tuple(self._deals)
+    def history_deals_get(self, position=None):
+        # Firma senza date: con le date il package ignorerebbe position=
+        step = self._deals_seq.pop(0) if len(self._deals_seq) > 1 else self._deals_seq[0]
+        return tuple(step)
 
     def order_send(self, request):
         self.sent_requests.append(request)
@@ -80,6 +90,10 @@ def wire_stub(monkeypatch):
     monkeypatch.setattr(executor.time, 'sleep', lambda s: None)
     monkeypatch.setattr(mt5_client, 'resolve_symbol', lambda asset: asset)
 
+    async def no_sleep(_seconds):
+        pass
+    monkeypatch.setattr(position_guard.asyncio, 'sleep', no_sleep)
+
 
 def use(monkeypatch, fake):
     monkeypatch.setattr(position_guard, 'mt5', fake)
@@ -106,13 +120,45 @@ def test_foreign_positions_are_ignored(monkeypatch):
     assert fake.sent_requests == []
 
 
+# ----- adozione delle posizioni senza commento del crawler -----
+
+@pytest.mark.parametrize("comment,magic", [
+    ("placement", 54321),   # legacy del vecchio executor
+    ("open", 54321),        # legacy del vecchio executor
+    ("", 0),                # manuale senza commento
+])
+def test_adopts_positions_without_crawler_comment(monkeypatch, comment, magic):
+    fake = use(monkeypatch, FakeMT5(
+        positions=[position(profit=-130.0, comment=comment, magic=magic, price_open=1.3415)],
+        deals=[deal(entry=ENTRY_IN), deal(profit=-130.0)]))
+    run(check_positions_once(FakeClient()))
+    # Riaperta col prezzo di apertura reale adottato come prezzo del commento
+    assert fake.sent_requests[1]['comment'] == '@1.3415 (-130)'
+    assert fake.sent_requests[1]['magic'] == magic
+
+
+def test_adopted_jpy_price_uses_two_decimals(monkeypatch):
+    fake = use(monkeypatch, FakeMT5(
+        positions=[position(symbol="USDJPY", profit=-130.0, comment="placement",
+                            price_open=145.503)],
+        deals=[deal(entry=ENTRY_IN), deal(profit=-130.0)]))
+    run(check_positions_once(FakeClient()))
+    assert fake.sent_requests[1]['comment'] == '@145.50 (-130)'
+
+
+def test_adoptable_position_above_threshold_is_left_alone(monkeypatch):
+    fake = use(monkeypatch, FakeMT5(positions=[position(profit=-80.0, comment="placement")]))
+    run(check_positions_once(FakeClient()))
+    assert fake.sent_requests == []
+
+
 # ----- cut & reopen -----
 
 def test_cut_and_reopen_flow(monkeypatch):
     fake = use(monkeypatch, FakeMT5(
         positions=[position(ticket=555, ptype=SELL, profit=-130.0, volume=0.10,
                             sl=1.36, tp=1.30, magic=54321, comment="@1.3390")],
-        deals=[deal(commission=-0.7), deal(profit=-127.0, swap=-2.1, commission=-0.7)]))
+        deals=[deal(commission=-0.7, entry=ENTRY_IN), deal(profit=-127.0, swap=-2.1, commission=-0.7)]))
     client = FakeClient()
     run(check_positions_once(client))
 
@@ -134,10 +180,45 @@ def test_cut_and_reopen_flow(monkeypatch):
 def test_losses_accumulate_across_cuts(monkeypatch):
     fake = use(monkeypatch, FakeMT5(
         positions=[position(profit=-126.0, comment="@1.3390 (-120)")],
-        deals=[deal(), deal(profit=-125.0, swap=-1.4)]))
+        deals=[deal(entry=ENTRY_IN), deal(profit=-125.0, swap=-1.4)]))
     run(check_positions_once(FakeClient()))
     # 120 precedenti + 126 realizzati adesso (125.0+1.4 -> round 126)
     assert fake.sent_requests[1]['comment'] == '@1.3390 (-246)'
+
+
+def test_realized_loss_ignores_deals_of_other_positions(monkeypatch):
+    # Il bug reale: history_deals_get restituiva TUTTI i deal del conto
+    # (deposito da +100k incluso) e la perdita veniva azzerata dal max(0, ...)
+    fake = use(monkeypatch, FakeMT5(
+        positions=[position(ticket=555, profit=-130.0)],
+        deals=[deal(profit=100000.0, entry=ENTRY_IN, position_id=0),   # deposito
+               deal(profit=42.0, position_id=999),                     # altra posizione
+               deal(entry=ENTRY_IN, commission=-0.25),
+               deal(profit=-5.5, commission=-0.25)]))
+    run(check_positions_once(FakeClient()))
+    assert fake.sent_requests[1]['comment'] == '@1.3390 (-6)'
+
+
+def test_realized_loss_waits_for_exit_deal(monkeypatch):
+    # Finché in history c'è solo il deal di apertura la guardia riprova;
+    # la somma è quella del passaggio con il deal di uscita
+    fake = use(monkeypatch, FakeMT5(
+        positions=[position(profit=-130.0)],
+        deals_sequence=[[deal(entry=ENTRY_IN)],
+                        [deal(entry=ENTRY_IN)],
+                        [deal(entry=ENTRY_IN), deal(profit=-130.5)]]))
+    run(check_positions_once(FakeClient()))
+    assert fake.sent_requests[1]['comment'] == '@1.3390 (-130)'
+
+
+def test_realized_loss_falls_back_to_position_snapshot(monkeypatch):
+    # Il deal di uscita non arriva mai in history: stima da profit+swap
+    # catturati al momento del taglio
+    fake = use(monkeypatch, FakeMT5(
+        positions=[position(profit=-130.0, swap=-2.0)],
+        deals=[deal(entry=ENTRY_IN)]))
+    run(check_positions_once(FakeClient()))
+    assert fake.sent_requests[1]['comment'] == '@1.3390 (-132)'
 
 
 def test_failed_close_alerts_and_does_not_reopen(monkeypatch):
@@ -153,7 +234,7 @@ def test_failed_close_alerts_and_does_not_reopen(monkeypatch):
 def test_failed_reopen_alerts_uncovered_position(monkeypatch):
     fake = use(monkeypatch, FakeMT5(
         positions=[position(profit=-130.0)],
-        deals=[deal(), deal(profit=-130.0)],
+        deals=[deal(entry=ENTRY_IN), deal(profit=-130.0)],
         send_results=[result(RETCODE_DONE), result(10019, comment="no money")]))
     client = FakeClient()
     run(check_positions_once(client))
