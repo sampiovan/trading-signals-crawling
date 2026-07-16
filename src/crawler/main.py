@@ -5,7 +5,7 @@ import logging
 import argparse
 from telethon import TelegramClient, events
 
-from crawler import executor, mt5_client, risk
+from crawler import executor, mt5_client, order_lookup, risk
 from crawler.config import load_config, get_setting
 from crawler.crawler_state import (
 	load_last_message_id,
@@ -34,7 +34,22 @@ async def notify_failure(client, signal, outcome):
 		logger.exception("Impossibile inviare la notifica Telegram del fallimento.")
 
 
-async def process_message(client, message, state_path):
+def _already_executed(signal):
+	"""
+	True se un ordine/posizione live corrisponde già al segnale (stesso
+	asset, tipo e prezzo/commento "@prezzo"): il crawler è crashato dopo
+	l'esecuzione ma prima di salvare lo stato, e il replay del catch-up
+	lo sta riproponendo. Residuo accettato: due segnali IDENTICI entrambi
+	ancora vivi nello stesso downtime verrebbero de-duplicati — il canale
+	non apre due posizioni allo stesso prezzo, e il replay in ordine
+	cronologico gestisce comunque placement→close→placement identico.
+	"""
+	ticket, _ = order_lookup.get_order_ticket(
+		signal['asset'], signal['entry'], signal['signal_type'])
+	return ticket
+
+
+async def process_message(client, message, state_path, catching_up=False):
 	"""
 	Pipeline condivisa tra eventi live e catch-up: recupera l'eventuale
 	messaggio citato, riconosce i segnali, li ESEGUE su MT5 e aggiorna
@@ -42,6 +57,11 @@ async def process_message(client, message, state_path):
 
 	Lo stato avanza anche per messaggi non riconosciuti o falliti: il
 	catch-up deve essere deterministico, non ritentare all'infinito.
+
+	Con catching_up=True i segnali che APRONO esposizione (placement e
+	open diretto a mercato) vengono saltati se risultano già eseguiti:
+	l'esecuzione avviene PRIMA del salvataggio dello stato, quindi un
+	crash nel mezzo farebbe rieseguire il segnale duplicando la posizione.
 	"""
 	message_text = message.raw_text or ''
 	logger.info(f"Nuovo messaggio ricevuto (id={message.id}): \n{message_text}\n\n")
@@ -70,6 +90,14 @@ async def process_message(client, message, state_path):
 		logger.info("Messaggio non riconosciuto come segnale di trading (o scartato).")
 	else:
 		for signal in signals:
+			if (catching_up and signal['message_type'] in ('placement', 'open')
+					and not signal['order_id'] and _already_executed(signal)):
+				logger.warning(
+					f"Catch-up: {signal['message_type']} {signal['signal_type']} "
+					f"{signal['asset']} @{signal['entry']} risulta già eseguito "
+					f"(crash prima del salvataggio dello stato?): salto il doppione."
+				)
+				continue
 			outcome = executor.execute(signal)
 			if not outcome.ok:
 				await notify_failure(client, signal, outcome)
@@ -118,7 +146,7 @@ async def catch_up(client, channel, state_path):
 	# reverse=True: dal più vecchio al più recente, per rispettare l'ordine dei segnali
 	async for message in client.iter_messages(channel, min_id=last_id, reverse=True):
 		missed += 1
-		await process_message(client, message, state_path)
+		await process_message(client, message, state_path, catching_up=True)
 
 	if missed:
 		logger.info(f"Catch-up completato: {missed} messaggi recuperati dal downtime.")
