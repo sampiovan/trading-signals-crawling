@@ -9,6 +9,7 @@ logs/
 
 # Stato generato a runtime
 crawler_state.json
+news_calendar.json
 
 # Python
 __pycache__/

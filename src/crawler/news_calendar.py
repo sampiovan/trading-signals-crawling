@@ -1,0 +1,127 @@
+"""
+Calendario economico per il blackout della guardia attorno alle notizie
+ad alto impatto.
+
+La fonte è il feed settimanale gratuito di Forex Factory (FairEconomy),
+senza API key: ff_calendar_thisweek.json. Si tengono (anche nella cache
+su disco) SOLO gli eventi con impact "High", gli equivalenti dei "3
+tori" di Investing.com. Il feed ammette al massimo 2 download ogni 5
+minuti: viene scaricato solo quando la cache (news_calendar.json,
+accanto al config) è più vecchia di REFRESH_HOURS; a feed
+irraggiungibile si riprova dopo un quarto d'ora.
+
+Fail-open: se il feed non risponde si usa la cache anche scaduta; senza
+nessuna cache il blackout resta semplicemente inattivo (warning nel log)
+— la guardia non viene mai bloccata per sempre da dati mancanti.
+
+Le date del feed sono ISO-8601 con offset: tutti i confronti avvengono
+in UTC, senza dipendere dal fuso locale o da quello del server MT5.
+"""
+import json
+import logging
+import urllib.request
+from datetime import datetime, timedelta, timezone
+
+logger = logging.getLogger(__name__)
+
+FEED_URL = 'https://nfs.faireconomy.media/ff_calendar_thisweek.json'
+CACHE_FILENAME = 'news_calendar.json'
+REFRESH_HOURS = 6	# età massima della cache prima di riscaricare il feed
+RETRY_MINUTES = 15	# attesa dopo un fetch fallito prima di riprovare
+
+# Eventi High della settimana: dict {'title', 'country', 'when' (UTC)}
+_events = []
+_next_refresh = None	# prossimo istante (UTC) in cui vale la pena ritentare
+_warned_no_data = False
+
+
+def _parse_events(raw_events):
+	events = []
+	for ev in raw_events or ():
+		try:
+			if ev.get('impact') != 'High':
+				continue
+			when = datetime.fromisoformat(ev['date']).astimezone(timezone.utc)
+			events.append({'title': ev.get('title', '?'), 'country': ev['country'], 'when': when})
+		except (KeyError, ValueError, TypeError):
+			logger.warning(f"Evento del calendario notizie non interpretabile, ignorato: {ev!r}")
+	return events
+
+
+def _load_cache(path):
+	try:
+		with open(path, 'r', encoding='utf-8') as f:
+			cache = json.load(f)
+		return cache if isinstance(cache, dict) else None
+	except (OSError, ValueError):
+		return None
+
+
+def _save_cache(cache, path):
+	try:
+		with open(path, 'w', encoding='utf-8') as f:
+			json.dump(cache, f)
+	except OSError:
+		logger.exception(f"Impossibile salvare la cache del calendario notizie su {path}.")
+
+
+def _fetch_feed():
+	# Lo User-Agent di default di urllib viene rifiutato dal feed (403)
+	req = urllib.request.Request(FEED_URL, headers={'User-Agent': 'Mozilla/5.0 (signals-crawler)'})
+	with urllib.request.urlopen(req, timeout=30) as resp:
+		return json.loads(resp.read().decode('utf-8'))
+
+
+def refresh(cache_path):
+	"""
+	Aggiorna gli eventi in memoria: dalla cache su disco se fresca,
+	altrimenti dal feed (persistendo solo gli eventi High). Chiamata
+	bloccante (rete/disco): va eseguita fuori dall'event loop
+	(asyncio.to_thread).
+	"""
+	global _events, _next_refresh, _warned_no_data
+	now = datetime.now(timezone.utc)
+	if _next_refresh is not None and now < _next_refresh:
+		return
+
+	cache = _load_cache(cache_path)
+	if cache:
+		try:
+			fetched_at = datetime.fromisoformat(cache['fetched_at'])
+			if now - fetched_at < timedelta(hours=REFRESH_HOURS):
+				_events = _parse_events(cache.get('events'))
+				_next_refresh = fetched_at + timedelta(hours=REFRESH_HOURS)
+				return
+		except (KeyError, ValueError, TypeError):
+			cache = None	# cache malformata: si riscarica
+
+	try:
+		raw = _fetch_feed()
+	except Exception:
+		_next_refresh = now + timedelta(minutes=RETRY_MINUTES)
+		if cache:
+			logger.warning("Feed del calendario notizie non raggiungibile: uso la cache scaduta.")
+			_events = _parse_events(cache.get('events'))
+		elif not _warned_no_data:
+			logger.warning("Feed del calendario notizie non raggiungibile e nessuna cache: blackout notizie inattivo.")
+			_warned_no_data = True
+		return
+
+	high_events = [ev for ev in raw if isinstance(ev, dict) and ev.get('impact') == 'High']
+	_save_cache({'fetched_at': now.isoformat(), 'events': high_events}, cache_path)
+	_events = _parse_events(high_events)
+	_next_refresh = now + timedelta(hours=REFRESH_HOURS)
+	logger.info(f"Calendario notizie aggiornato: {len(_events)} eventi ad alto impatto in settimana.")
+
+
+def in_blackout(minutes, now=None):
+	"""
+	La notizia ad alto impatto (di QUALUNQUE valuta) in finestra
+	±minutes rispetto ad adesso, o None.
+	"""
+	now = now or datetime.now(timezone.utc)
+	window = timedelta(minutes=float(minutes))
+	for ev in _events:
+		if abs(ev['when'] - now) <= window:
+			return ev
+	return None

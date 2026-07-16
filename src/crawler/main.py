@@ -15,6 +15,7 @@ from crawler.crawler_state import (
 )
 from crawler.log_setup import setup_logger
 from crawler.msg_parser import parse_message, OrderNotFoundException
+from crawler.news_calendar import CACHE_FILENAME as NEWS_CACHE_FILENAME
 from crawler.position_guard import run_guard
 
 logger = logging.getLogger("crawler")
@@ -165,8 +166,10 @@ async def main(config_path):
 		async def handler(event):
 			await process_message(client, event.message, state_path)
 
-		# Guardia delle posizioni in perdita (cut & reopen), in parallelo
-		guard_task = asyncio.create_task(run_guard(client))
+		# Guardia delle posizioni in perdita (cut & reopen), in parallelo;
+		# la cache del calendario notizie vive accanto al config
+		news_cache_path = os.path.join(base_dir, NEWS_CACHE_FILENAME)
+		guard_task = asyncio.create_task(run_guard(client, news_cache_path=news_cache_path))
 
 		logger.info("In ascolto dei nuovi messaggi... (premi Ctrl+C per terminare)")
 		try:

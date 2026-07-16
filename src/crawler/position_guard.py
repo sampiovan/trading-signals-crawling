@@ -15,11 +15,27 @@ e quelle senza commento (es. aperte a mano): al primo taglio il loro
 prezzo di apertura reale diventa il prezzo del commento e la riaperta
 nasce già nel formato nuovo. Le posizioni con commenti di altri sistemi
 sono ignorate.
+
+Anti-churn: una posizione appena aperta parte già in perdita dello
+spread e, quando lo spread è largo (volatilità, notizie), tagliarla
+innescherebbe un ciclo di chiusure/riaperture che paga lo spread a ogni
+giro. Due protezioni ([guard] in config): le posizioni più giovani di
+MIN_AGE_SECONDS non vengono toccate (ogni riaperta è una posizione
+nuova, quindi l'età minima fa anche da pausa tra un taglio e l'altro) e
+il taglio è rinviato finché CUT_LOSS non supera SPREAD_FACTOR volte il
+costo corrente dello spread. L'età è confrontata in tempo SERVER
+(pos.time e tick.time), mai con l'orologio locale.
+
+Blackout notizie (NEWS_BLACKOUT): la guardia è sospesa DEL TUTTO, su
+tutti gli asset, nella finestra di ±NEWS_BLACKOUT_MINUTES attorno a
+qualunque notizia ad alto impatto (calendario gratuito di Forex Factory,
+vedi news_calendar). Ferma SOLO i tagli della guardia: la pipeline dei
+messaggi Telegram (parsing ed esecuzione dei segnali) non è toccata.
 """
 import asyncio
 import logging
 
-from crawler import executor
+from crawler import executor, news_calendar
 from crawler.comments import parse_comment, format_loss_comment, format_price_comment
 from crawler.config import load_config, get_setting
 
@@ -35,9 +51,19 @@ DEAL_ENTRY_OUT = 1	# ENUM_DEAL_ENTRY: deal di uscita (chiusura della posizione)
 # Commenti scritti dal vecchio executor (pre-commenti "@prezzo")
 LEGACY_COMMENTS = frozenset({'placement', 'open'})
 
+# Per loggare il blackout solo alle transizioni (non a ogni passata)
+_blackout_active = False
+
+
+_TRUE_VALUES = ('true', '1', 'yes', 'si', 'sì')
+
 
 def _guard_setting(key, default):
 	return get_setting(load_config(), 'guard', key, default=default)
+
+
+def _guard_flag(key, default):
+	return _guard_setting(key, default).lower() in _TRUE_VALUES
 
 
 async def _alert(client, text):
@@ -130,24 +156,69 @@ def _parse_or_adopt(pos):
 	return parse_comment(format_price_comment(pos.symbol, pos.price_open))
 
 
+def _spread_cost(tick, sym_info, volume):
+	"""Costo dello spread in valuta del conto per il volume dato (0 se non calcolabile)."""
+	tick_size = getattr(sym_info, 'trade_tick_size', 0) or 0
+	tick_value = getattr(sym_info, 'trade_tick_value', 0) or 0
+	if tick_size <= 0 or tick_value <= 0:
+		return 0.0
+	return (tick.ask - tick.bid) / tick_size * tick_value * volume
+
+
+def _in_news_blackout():
+	"""True se la guardia è sospesa per una notizia ad alto impatto (logga le transizioni)."""
+	global _blackout_active
+	event = None
+	if _guard_flag('NEWS_BLACKOUT', 'true'):
+		minutes = float(_guard_setting('NEWS_BLACKOUT_MINUTES', '30') or 0)
+		event = news_calendar.in_blackout(minutes)
+	if event is not None and not _blackout_active:
+		logger.info(f"Guardia in blackout notizie ({event['country']} {event['title']}): tagli sospesi.")
+	elif event is None and _blackout_active:
+		logger.info("Guardia riattivata dopo il blackout notizie.")
+	_blackout_active = event is not None
+	return _blackout_active
+
+
 async def check_positions_once(client):
 	"""Un passaggio della guardia su tutte le posizioni aperte."""
+	if _in_news_blackout():
+		return
+
 	cut_loss = float(_guard_setting('CUT_LOSS', '125') or 125)
+	min_age = float(_guard_setting('MIN_AGE_SECONDS', '60') or 0)
+	spread_factor = float(_guard_setting('SPREAD_FACTOR', '2') or 0)
 
 	for pos in (mt5.positions_get() or ()):
 		# Trigger sulla sola perdita di prezzo (esclusi swap/commissioni)
 		if pos.profit > -cut_loss:
 			continue
+		tick = mt5.symbol_info_tick(pos.symbol)
+		if tick is None:
+			logger.warning(f"Guardia: nessun tick per {pos.symbol}, taglio rinviato.")
+			continue
+		# Anti-churn: età minima in tempo server (una riaperta è una
+		# posizione nuova: fa anche da pausa tra un taglio e l'altro)
+		if tick.time - getattr(pos, 'time', 0) < min_age:
+			continue
 		parsed = _parse_or_adopt(pos)
 		if parsed is None:
+			continue
+		# Anti-churn: con la soglia troppo vicina al costo dello spread la
+		# riaperta rientrerebbe subito in zona taglio: rinvia finché rientra
+		cost = _spread_cost(tick, mt5.symbol_info(pos.symbol), pos.volume)
+		if cost > 0 and cut_loss <= spread_factor * cost:
+			logger.warning(
+				f"Guardia: spread su {pos.symbol} costa {cost:.2f} e la soglia "
+				f"{cut_loss:.0f} non supera {spread_factor:g}x: taglio rinviato."
+			)
 			continue
 		await _cut_and_reopen(client, pos, parsed, cut_loss)
 
 
-async def run_guard(client):
+async def run_guard(client, news_cache_path=None):
 	"""Loop della guardia: un check ogni INTERVAL_SECONDS, robusto agli errori."""
-	enabled = _guard_setting('ENABLED', 'true').lower()
-	if enabled not in ('true', '1', 'yes', 'si', 'sì'):
+	if not _guard_flag('ENABLED', 'true'):
 		logger.info("Guardia posizioni disabilitata da config ([guard] ENABLED).")
 		return
 
@@ -155,8 +226,14 @@ async def run_guard(client):
 	cut_loss = _guard_setting('CUT_LOSS', '125')
 	logger.info(f"Guardia posizioni attiva: taglio a -{cut_loss}, check ogni {interval:.0f}s.")
 
+	news_enabled = _guard_flag('NEWS_BLACKOUT', 'true') and news_cache_path is not None
+
 	while True:
 		try:
+			if news_enabled:
+				# Bloccante (rete/disco): fuori dall'event loop. Internamente
+				# è un no-op finché la cache in memoria è fresca.
+				await asyncio.to_thread(news_calendar.refresh, news_cache_path)
 			await check_positions_once(client)
 		except asyncio.CancelledError:
 			raise

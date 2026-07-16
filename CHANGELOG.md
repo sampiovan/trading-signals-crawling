@@ -10,6 +10,19 @@ Il formato segue [Keep a Changelog](https://keepachangelog.com/it-IT/1.1.0/) e i
 In roadmap: **multi-canale** (impostazioni e rischio per canale) e **budget di perdita
 giornaliero** (5% del deposito iniziale, con stop delle aperture all'80% del budget).
 
+### Added
+- Guardia anti-churn: con spread largo una posizione appena aperta parte già in
+  perdita dello spread e il taglio immediato innescherebbe un ciclo di
+  chiusure/riaperture. Due protezioni in `[guard]`: età minima della posizione
+  (`MIN_AGE_SECONDS` — ogni riaperta è una posizione nuova, quindi fa anche da
+  pausa tra un taglio e l'altro) e rinvio del taglio finché `CUT_LOSS` non
+  supera `SPREAD_FACTOR` volte il costo corrente dello spread.
+- Blackout notizie: guardia sospesa su tutti gli asset per
+  ±`NEWS_BLACKOUT_MINUTES` attorno a qualunque evento ad alto impatto, dal
+  calendario settimanale gratuito di Forex Factory (in cache solo gli eventi
+  High, refresh ogni 6 ore, fail-open senza feed né cache). Solo i tagli della
+  guardia: i segnali del canale vengono sempre eseguiti.
+
 ## [2.1.0] - 2026-07-16
 
 ### Added
