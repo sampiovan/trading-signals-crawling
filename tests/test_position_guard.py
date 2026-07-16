@@ -142,9 +142,13 @@ def test_threshold_scales_with_initial_deposit(monkeypatch):
     assert len(fake.sent_requests) == 2  # chiusura + riapertura
 
 
-def test_missing_initial_deposit_skips_pass(monkeypatch, caplog):
-    # Senza deposito iniziale la soglia non è calcolabile: mai tagliare
-    monkeypatch.setattr(risk, '_initial_deposit', None)
+@pytest.mark.parametrize("deposit", [None, -100000.0])
+def test_unusable_initial_deposit_skips_pass(monkeypatch, caplog, deposit):
+    # Senza deposito iniziale (o con un deposito negativo per un refuso in
+    # config) la soglia non è calcolabile: mai tagliare alla cieca — con la
+    # soglia negativa il confronto si invertirebbe, tagliando anche le
+    # posizioni in profitto
+    monkeypatch.setattr(risk, '_initial_deposit', deposit)
     fake = use(monkeypatch, FakeMT5(positions=[position(profit=-500.0)]))
     run(check_positions_once(FakeClient()))
     assert fake.sent_requests == []

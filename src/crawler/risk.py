@@ -38,9 +38,10 @@ def daily_loss_budget():
 	Perdita giornaliera consentita in valuta del conto: DAILY_LOSS_PERCENT
 	(config [risk], default 5 — regola FTMO) per cento del deposito iniziale,
 	quindi fissa anche quando il balance cresce. None se il deposito non è
-	ancora noto.
+	utilizzabile (non ancora noto, oppure ≤ 0 per un refuso in config: una
+	soglia negativa invertirebbe i confronti di chi la usa).
 	"""
-	if not _initial_deposit:
+	if _initial_deposit is None or _initial_deposit <= 0:
 		return None
 	percent = float(_risk_setting('DAILY_LOSS_PERCENT', '5') or 5)
 	return _initial_deposit * percent / 100
