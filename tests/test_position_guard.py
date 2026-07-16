@@ -99,7 +99,7 @@ def wire_stub(monkeypatch):
     async def no_sleep(_seconds):
         pass
     monkeypatch.setattr(position_guard.asyncio, 'sleep', no_sleep)
-    position_guard._last_cut_at.clear()
+    monkeypatch.setattr(position_guard, '_blackout_active', False)
     monkeypatch.setattr(news_calendar, '_events', [])
 
 
@@ -137,36 +137,6 @@ def test_young_position_is_left_alone(monkeypatch):
         positions=[position(profit=-130.0, time=SERVER_NOW - 10)]))
     run(check_positions_once(FakeClient()))
     assert fake.sent_requests == []
-
-
-def test_symbol_cooldown_blocks_immediate_recut(monkeypatch):
-    fake = use(monkeypatch, FakeMT5(
-        positions=[position(profit=-130.0)],
-        deals=[deal(entry=ENTRY_IN), deal(profit=-130.0)]))
-    client = FakeClient()
-    run(check_positions_once(client))
-    assert len(fake.sent_requests) == 2  # taglio + riaperta
-    # Stessa posizione ancora in perdita al passaggio dopo: cooldown attivo
-    run(check_positions_once(client))
-    assert len(fake.sent_requests) == 2
-
-
-def test_expired_cooldown_allows_cut(monkeypatch):
-    position_guard._last_cut_at['EURUSD'] = SERVER_NOW - 301  # oltre i 300s di default
-    fake = use(monkeypatch, FakeMT5(
-        positions=[position(profit=-130.0)],
-        deals=[deal(entry=ENTRY_IN), deal(profit=-130.0)]))
-    run(check_positions_once(FakeClient()))
-    assert len(fake.sent_requests) == 2
-
-
-def test_cooldown_is_per_symbol(monkeypatch):
-    position_guard._last_cut_at['GBPUSD'] = SERVER_NOW  # appena tagliato ALTRO simbolo
-    fake = use(monkeypatch, FakeMT5(
-        positions=[position(symbol="EURUSD", profit=-130.0)],
-        deals=[deal(entry=ENTRY_IN), deal(profit=-130.0)]))
-    run(check_positions_once(FakeClient()))
-    assert len(fake.sent_requests) == 2
 
 
 def test_wide_spread_defers_cut(monkeypatch):
@@ -209,22 +179,15 @@ def _high_impact_event_now(country="USD"):
             'when': datetime.now(timezone.utc)}
 
 
-def test_news_blackout_defers_cut(monkeypatch):
-    monkeypatch.setattr(news_calendar, '_events', [_high_impact_event_now("USD")])
+def test_news_blackout_suspends_guard_on_all_assets(monkeypatch):
+    # Notizia High su una valuta QUALSIASI: la guardia si ferma del tutto
+    monkeypatch.setattr(news_calendar, '_events', [_high_impact_event_now("CAD")])
     fake = use(monkeypatch, FakeMT5(
-        positions=[position(profit=-130.0)],  # EURUSD: USD in blackout
+        positions=[position(symbol="EURUSD", profit=-130.0),
+                   position(ticket=556, symbol="GBPUSD", profit=-500.0)],
         deals=[deal(entry=ENTRY_IN), deal(profit=-130.0)]))
     run(check_positions_once(FakeClient()))
     assert fake.sent_requests == []
-
-
-def test_news_blackout_on_unrelated_currency_cuts(monkeypatch):
-    monkeypatch.setattr(news_calendar, '_events', [_high_impact_event_now("CAD")])
-    fake = use(monkeypatch, FakeMT5(
-        positions=[position(profit=-130.0)],
-        deals=[deal(entry=ENTRY_IN), deal(profit=-130.0)]))
-    run(check_positions_once(FakeClient()))
-    assert len(fake.sent_requests) == 2
 
 
 def test_news_blackout_disabled_cuts(monkeypatch):

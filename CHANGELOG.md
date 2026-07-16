@@ -13,15 +13,15 @@ giornaliero** (5% del deposito iniziale, con stop delle aperture all'80% del bud
 ### Added
 - Guardia anti-churn: con spread largo una posizione appena aperta parte già in
   perdita dello spread e il taglio immediato innescherebbe un ciclo di
-  chiusure/riaperture. Tre protezioni in `[guard]`: età minima della posizione
-  (`MIN_AGE_SECONDS`), cooldown per simbolo dopo un taglio (`COOLDOWN_SECONDS`)
-  e rinvio del taglio finché `CUT_LOSS` non supera `SPREAD_FACTOR` volte il
-  costo corrente dello spread.
-- Blackout notizie: tagli della guardia sospesi per ±`NEWS_BLACKOUT_MINUTES`
-  attorno agli eventi ad alto impatto sulle valute del simbolo, dal calendario
-  settimanale gratuito di Forex Factory (cache in `news_calendar.json`, refresh
-  ogni `NEWS_REFRESH_HOURS` ore, fail-open senza feed né cache). Solo i tagli:
-  le aperture da segnale non vengono mai bloccate.
+  chiusure/riaperture. Due protezioni in `[guard]`: età minima della posizione
+  (`MIN_AGE_SECONDS` — ogni riaperta è una posizione nuova, quindi fa anche da
+  pausa tra un taglio e l'altro) e rinvio del taglio finché `CUT_LOSS` non
+  supera `SPREAD_FACTOR` volte il costo corrente dello spread.
+- Blackout notizie: guardia sospesa su tutti gli asset per
+  ±`NEWS_BLACKOUT_MINUTES` attorno a qualunque evento ad alto impatto, dal
+  calendario settimanale gratuito di Forex Factory (in cache solo gli eventi
+  High, refresh ogni 6 ore, fail-open senza feed né cache). Solo i tagli della
+  guardia: i segnali del canale vengono sempre eseguiti.
 
 ## [2.1.0] - 2026-07-16
 

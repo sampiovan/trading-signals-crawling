@@ -19,18 +19,18 @@ sono ignorate.
 Anti-churn: una posizione appena aperta parte già in perdita dello
 spread e, quando lo spread è largo (volatilità, notizie), tagliarla
 innescherebbe un ciclo di chiusure/riaperture che paga lo spread a ogni
-giro. Tre protezioni ([guard] in config): le posizioni più giovani di
-MIN_AGE_SECONDS non vengono toccate; dopo un taglio il SIMBOLO è in
-cooldown per COOLDOWN_SECONDS (il ticket cambia a ogni riaperta); il
-taglio è rinviato finché CUT_LOSS non supera SPREAD_FACTOR volte il
-costo corrente dello spread. Età e cooldown sono confrontati in tempo
-SERVER (pos.time e tick.time), mai con l'orologio locale.
+giro. Due protezioni ([guard] in config): le posizioni più giovani di
+MIN_AGE_SECONDS non vengono toccate (ogni riaperta è una posizione
+nuova, quindi l'età minima fa anche da pausa tra un taglio e l'altro) e
+il taglio è rinviato finché CUT_LOSS non supera SPREAD_FACTOR volte il
+costo corrente dello spread. L'età è confrontata in tempo SERVER
+(pos.time e tick.time), mai con l'orologio locale.
 
-Blackout notizie (NEWS_BLACKOUT): i tagli sono sospesi nella finestra di
-±NEWS_BLACKOUT_MINUTES attorno agli eventi ad alto impatto sulle valute
-del simbolo (calendario gratuito di Forex Factory, vedi news_calendar).
-Ferma SOLO i tagli della guardia: le aperture da segnale del canale non
-vengono mai bloccate.
+Blackout notizie (NEWS_BLACKOUT): la guardia è sospesa DEL TUTTO, su
+tutti gli asset, nella finestra di ±NEWS_BLACKOUT_MINUTES attorno a
+qualunque notizia ad alto impatto (calendario gratuito di Forex Factory,
+vedi news_calendar). Ferma SOLO i tagli della guardia: la pipeline dei
+messaggi Telegram (parsing ed esecuzione dei segnali) non è toccata.
 """
 import asyncio
 import logging
@@ -51,8 +51,8 @@ DEAL_ENTRY_OUT = 1	# ENUM_DEAL_ENTRY: deal di uscita (chiusura della posizione)
 # Commenti scritti dal vecchio executor (pre-commenti "@prezzo")
 LEGACY_COMMENTS = frozenset({'placement', 'open'})
 
-# Ultimo taglio per simbolo, in tempo server (epoch del broker)
-_last_cut_at = {}
+# Per loggare il blackout solo alle transizioni (non a ogni passata)
+_blackout_active = False
 
 
 _TRUE_VALUES = ('true', '1', 'yes', 'si', 'sì')
@@ -165,14 +165,29 @@ def _spread_cost(tick, sym_info, volume):
 	return (tick.ask - tick.bid) / tick_size * tick_value * volume
 
 
+def _in_news_blackout():
+	"""True se la guardia è sospesa per una notizia ad alto impatto (logga le transizioni)."""
+	global _blackout_active
+	event = None
+	if _guard_flag('NEWS_BLACKOUT', 'true'):
+		minutes = float(_guard_setting('NEWS_BLACKOUT_MINUTES', '30') or 0)
+		event = news_calendar.in_blackout(minutes)
+	if event is not None and not _blackout_active:
+		logger.info(f"Guardia in blackout notizie ({event['country']} {event['title']}): tagli sospesi.")
+	elif event is None and _blackout_active:
+		logger.info("Guardia riattivata dopo il blackout notizie.")
+	_blackout_active = event is not None
+	return _blackout_active
+
+
 async def check_positions_once(client):
 	"""Un passaggio della guardia su tutte le posizioni aperte."""
+	if _in_news_blackout():
+		return
+
 	cut_loss = float(_guard_setting('CUT_LOSS', '125') or 125)
 	min_age = float(_guard_setting('MIN_AGE_SECONDS', '60') or 0)
-	cooldown = float(_guard_setting('COOLDOWN_SECONDS', '300') or 0)
 	spread_factor = float(_guard_setting('SPREAD_FACTOR', '2') or 0)
-	news_blackout = _guard_flag('NEWS_BLACKOUT', 'true')
-	news_minutes = float(_guard_setting('NEWS_BLACKOUT_MINUTES', '30') or 0)
 
 	for pos in (mt5.positions_get() or ()):
 		# Trigger sulla sola perdita di prezzo (esclusi swap/commissioni)
@@ -182,10 +197,9 @@ async def check_positions_once(client):
 		if tick is None:
 			logger.warning(f"Guardia: nessun tick per {pos.symbol}, taglio rinviato.")
 			continue
-		# Anti-churn: età minima e cooldown per simbolo, in tempo server
+		# Anti-churn: età minima in tempo server (una riaperta è una
+		# posizione nuova: fa anche da pausa tra un taglio e l'altro)
 		if tick.time - getattr(pos, 'time', 0) < min_age:
-			continue
-		if tick.time - _last_cut_at.get(pos.symbol, 0) < cooldown:
 			continue
 		parsed = _parse_or_adopt(pos)
 		if parsed is None:
@@ -199,18 +213,7 @@ async def check_positions_once(client):
 				f"{cut_loss:.0f} non supera {spread_factor:g}x: taglio rinviato."
 			)
 			continue
-		# Blackout notizie: niente tagli a ridosso degli eventi ad alto
-		# impatto sulle valute del simbolo (spread e volatilità anomali)
-		if news_blackout:
-			event = news_calendar.in_blackout(pos.symbol, news_minutes)
-			if event is not None:
-				logger.warning(
-					f"Guardia: blackout notizie su {pos.symbol} "
-					f"({event['country']} {event['title']}): taglio rinviato."
-				)
-				continue
 		await _cut_and_reopen(client, pos, parsed, cut_loss)
-		_last_cut_at[pos.symbol] = tick.time
 
 
 async def run_guard(client, news_cache_path=None):
@@ -224,14 +227,13 @@ async def run_guard(client, news_cache_path=None):
 	logger.info(f"Guardia posizioni attiva: taglio a -{cut_loss}, check ogni {interval:.0f}s.")
 
 	news_enabled = _guard_flag('NEWS_BLACKOUT', 'true') and news_cache_path is not None
-	refresh_hours = float(_guard_setting('NEWS_REFRESH_HOURS', '6') or 6)
 
 	while True:
 		try:
 			if news_enabled:
 				# Bloccante (rete/disco): fuori dall'event loop. Internamente
 				# è un no-op finché la cache in memoria è fresca.
-				await asyncio.to_thread(news_calendar.refresh, news_cache_path, refresh_hours)
+				await asyncio.to_thread(news_calendar.refresh, news_cache_path)
 			await check_positions_once(client)
 		except asyncio.CancelledError:
 			raise

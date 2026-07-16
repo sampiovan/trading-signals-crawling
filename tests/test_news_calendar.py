@@ -50,37 +50,25 @@ def test_malformed_event_is_ignored():
     assert len(news_calendar._events) == 1
 
 
-# ----- in_blackout -----
+# ----- in_blackout: globale, qualunque valuta -----
 
-def test_event_inside_window_blacks_out_both_currencies():
-    load_events([feed_event(country="USD", offset_minutes=20)])
-    assert in_blackout("EURUSD", 30, now=NOW) is not None
-    assert in_blackout("USDJPY", 30, now=NOW) is not None
+def test_event_inside_window_blacks_out():
+    load_events([feed_event(offset_minutes=20)])
+    assert in_blackout(30, now=NOW) is not None
 
 
 def test_event_outside_window_does_not_black_out():
-    load_events([feed_event(country="USD", offset_minutes=45)])
-    assert in_blackout("EURUSD", 30, now=NOW) is None
+    load_events([feed_event(offset_minutes=45)])
+    assert in_blackout(30, now=NOW) is None
 
 
 def test_event_in_the_past_still_blacks_out_within_window():
-    load_events([feed_event(country="GBP", offset_minutes=-25)])
-    assert in_blackout("GBPUSD", 30, now=NOW) is not None
+    load_events([feed_event(offset_minutes=-25)])
+    assert in_blackout(30, now=NOW) is not None
 
 
-def test_unrelated_currency_does_not_black_out():
-    load_events([feed_event(country="USD", offset_minutes=0)])
-    assert in_blackout("EURJPY", 30, now=NOW) is None
-
-
-def test_broker_suffix_symbol_matches():
-    load_events([feed_event(country="EUR", offset_minutes=0)])
-    assert in_blackout("EURUSD.m", 30, now=NOW) is not None
-
-
-def test_non_fx_symbol_never_blacks_out():
-    load_events([feed_event(country="USD", offset_minutes=0)])
-    assert in_blackout("FRA40.cash", 30, now=NOW) is None
+def test_no_events_no_blackout():
+    assert in_blackout(30, now=NOW) is None
 
 
 # ----- refresh: cache, fetch, fail-open -----
@@ -95,19 +83,19 @@ def test_fresh_cache_is_used_without_fetching(tmp_path, monkeypatch):
     write_cache(cache, [feed_event()], datetime.now(timezone.utc))
     monkeypatch.setattr(news_calendar, '_fetch_feed',
                         lambda: pytest.fail("non deve scaricare con cache fresca"))
-    refresh(str(cache), refresh_hours=6)
+    refresh(str(cache))
     assert len(news_calendar._events) == 1
 
 
-def test_stale_cache_triggers_fetch_and_rewrites_cache(tmp_path, monkeypatch):
+def test_stale_cache_triggers_fetch_and_caches_only_high(tmp_path, monkeypatch):
     cache = tmp_path / "news_calendar.json"
     write_cache(cache, [], datetime.now(timezone.utc) - timedelta(hours=7))
     monkeypatch.setattr(news_calendar, '_fetch_feed',
                         lambda: [feed_event(), feed_event(impact="Low")])
-    refresh(str(cache), refresh_hours=6)
+    refresh(str(cache))
     assert len(news_calendar._events) == 1
     saved = json.loads(cache.read_text(encoding="utf-8"))
-    assert len(saved['events']) == 2  # la cache conserva il feed grezzo
+    assert len(saved['events']) == 1  # in cache SOLO gli eventi High
 
 
 def test_failed_fetch_falls_back_to_stale_cache(tmp_path, monkeypatch):
@@ -117,7 +105,7 @@ def test_failed_fetch_falls_back_to_stale_cache(tmp_path, monkeypatch):
     def boom():
         raise OSError("rete giu'")
     monkeypatch.setattr(news_calendar, '_fetch_feed', boom)
-    refresh(str(cache), refresh_hours=6)
+    refresh(str(cache))
     assert len(news_calendar._events) == 1  # fail-open sulla cache scaduta
 
 
@@ -125,9 +113,9 @@ def test_failed_fetch_without_cache_disables_blackout(tmp_path, monkeypatch):
     def boom():
         raise OSError("rete giu'")
     monkeypatch.setattr(news_calendar, '_fetch_feed', boom)
-    refresh(str(tmp_path / "news_calendar.json"), refresh_hours=6)
+    refresh(str(tmp_path / "news_calendar.json"))
     assert news_calendar._events == []
-    assert in_blackout("EURUSD", 30) is None
+    assert in_blackout(30) is None
 
 
 def test_refresh_is_throttled_between_calls(tmp_path, monkeypatch):
@@ -138,6 +126,6 @@ def test_refresh_is_throttled_between_calls(tmp_path, monkeypatch):
         return [feed_event()]
     monkeypatch.setattr(news_calendar, '_fetch_feed', counting_fetch)
     cache = str(tmp_path / "news_calendar.json")
-    refresh(cache, refresh_hours=6)
-    refresh(cache, refresh_hours=6)  # subito dopo: no-op in memoria
+    refresh(cache)
+    refresh(cache)  # subito dopo: no-op in memoria
     assert len(calls) == 1

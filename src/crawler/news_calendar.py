@@ -1,14 +1,14 @@
 """
-Calendario economico per il blackout dei tagli della guardia attorno
-alle notizie ad alto impatto.
+Calendario economico per il blackout della guardia attorno alle notizie
+ad alto impatto.
 
 La fonte è il feed settimanale gratuito di Forex Factory (FairEconomy),
-senza API key: ff_calendar_thisweek.json. Si considerano solo gli eventi
-con impact "High" (equivalenti ai "3 tori" di Investing.com). Il feed
-ammette al massimo 2 download ogni 5 minuti: viene scaricato solo quando
-la cache su disco (news_calendar.json, accanto al config) è più vecchia
-di NEWS_REFRESH_HOURS; a feed irraggiungibile si riprova dopo un quarto
-d'ora.
+senza API key: ff_calendar_thisweek.json. Si tengono (anche nella cache
+su disco) SOLO gli eventi con impact "High", gli equivalenti dei "3
+tori" di Investing.com. Il feed ammette al massimo 2 download ogni 5
+minuti: viene scaricato solo quando la cache (news_calendar.json,
+accanto al config) è più vecchia di REFRESH_HOURS; a feed
+irraggiungibile si riprova dopo un quarto d'ora.
 
 Fail-open: se il feed non risponde si usa la cache anche scaduta; senza
 nessuna cache il blackout resta semplicemente inattivo (warning nel log)
@@ -19,7 +19,6 @@ in UTC, senza dipendere dal fuso locale o da quello del server MT5.
 """
 import json
 import logging
-import re
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
@@ -27,15 +26,13 @@ logger = logging.getLogger(__name__)
 
 FEED_URL = 'https://nfs.faireconomy.media/ff_calendar_thisweek.json'
 CACHE_FILENAME = 'news_calendar.json'
+REFRESH_HOURS = 6	# età massima della cache prima di riscaricare il feed
 RETRY_MINUTES = 15	# attesa dopo un fetch fallito prima di riprovare
 
 # Eventi High della settimana: dict {'title', 'country', 'when' (UTC)}
 _events = []
 _next_refresh = None	# prossimo istante (UTC) in cui vale la pena ritentare
 _warned_no_data = False
-
-# Simbolo FX "AAABBB" con eventuale suffisso broker (es. EURUSD.m)
-_FX_SYMBOL_RE = re.compile(r'^([A-Z]{3})([A-Z]{3})($|[^A-Z])')
 
 
 def _parse_events(raw_events):
@@ -75,11 +72,12 @@ def _fetch_feed():
 		return json.loads(resp.read().decode('utf-8'))
 
 
-def refresh(cache_path, refresh_hours):
+def refresh(cache_path):
 	"""
 	Aggiorna gli eventi in memoria: dalla cache su disco se fresca,
-	altrimenti dal feed (persistendo la nuova cache). Chiamata bloccante
-	(rete/disco): va eseguita fuori dall'event loop (asyncio.to_thread).
+	altrimenti dal feed (persistendo solo gli eventi High). Chiamata
+	bloccante (rete/disco): va eseguita fuori dall'event loop
+	(asyncio.to_thread).
 	"""
 	global _events, _next_refresh, _warned_no_data
 	now = datetime.now(timezone.utc)
@@ -90,9 +88,9 @@ def refresh(cache_path, refresh_hours):
 	if cache:
 		try:
 			fetched_at = datetime.fromisoformat(cache['fetched_at'])
-			if now - fetched_at < timedelta(hours=float(refresh_hours)):
+			if now - fetched_at < timedelta(hours=REFRESH_HOURS):
 				_events = _parse_events(cache.get('events'))
-				_next_refresh = fetched_at + timedelta(hours=float(refresh_hours))
+				_next_refresh = fetched_at + timedelta(hours=REFRESH_HOURS)
 				return
 		except (KeyError, ValueError, TypeError):
 			cache = None	# cache malformata: si riscarica
@@ -109,25 +107,21 @@ def refresh(cache_path, refresh_hours):
 			_warned_no_data = True
 		return
 
-	_save_cache({'fetched_at': now.isoformat(), 'events': raw}, cache_path)
-	_events = _parse_events(raw)
-	_next_refresh = now + timedelta(hours=float(refresh_hours))
+	high_events = [ev for ev in raw if isinstance(ev, dict) and ev.get('impact') == 'High']
+	_save_cache({'fetched_at': now.isoformat(), 'events': high_events}, cache_path)
+	_events = _parse_events(high_events)
+	_next_refresh = now + timedelta(hours=REFRESH_HOURS)
 	logger.info(f"Calendario notizie aggiornato: {len(_events)} eventi ad alto impatto in settimana.")
 
 
-def in_blackout(symbol, minutes, now=None):
+def in_blackout(minutes, now=None):
 	"""
-	L'evento ad alto impatto in finestra ±minutes per una delle due valute
-	del simbolo FX, o None. I simboli non-FX (nome non "AAABBB": indici,
-	metalli, crypto) non matchano mai: nessun blackout.
+	La notizia ad alto impatto (di QUALUNQUE valuta) in finestra
+	±minutes rispetto ad adesso, o None.
 	"""
-	match = _FX_SYMBOL_RE.match(symbol.upper())
-	if not match:
-		return None
-	currencies = {match.group(1), match.group(2)}
 	now = now or datetime.now(timezone.utc)
 	window = timedelta(minutes=float(minutes))
 	for ev in _events:
-		if ev['country'] in currencies and abs(ev['when'] - now) <= window:
+		if abs(ev['when'] - now) <= window:
 			return ev
 	return None
