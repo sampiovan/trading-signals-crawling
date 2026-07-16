@@ -10,6 +10,8 @@ Il formato segue [Keep a Changelog](https://keepachangelog.com/it-IT/1.1.0/) e i
 In roadmap: **multi-canale** (impostazioni e rischio per canale) e **budget di perdita
 giornaliero** (5% del deposito iniziale, con stop delle aperture all'80% del budget).
 
+## [2.2.0] - 2026-07-16
+
 ### Added
 - Guardia anti-churn: con spread largo una posizione appena aperta parte già in
   perdita dello spread e il taglio immediato innescherebbe un ciclo di
@@ -107,7 +109,8 @@ comunicanti via CSV. Congelata nel tag `v1.0.0`; eventuali hotfix sul branch `re
 - Ordini a mercato inviati con prezzo 0 (rifiutati dal broker).
 - Matching nel registro con tolleranza fissa inadatta alle coppie JPY.
 
-[Unreleased]: https://github.com/sampiovan/trading-signals-crawling/compare/v2.1.0...HEAD
+[Unreleased]: https://github.com/sampiovan/trading-signals-crawling/compare/v2.2.0...HEAD
+[2.2.0]: https://github.com/sampiovan/trading-signals-crawling/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/sampiovan/trading-signals-crawling/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/sampiovan/trading-signals-crawling/compare/v1.0.0...v2.0.0
 [1.0.0]: https://github.com/sampiovan/trading-signals-crawling/releases/tag/v1.0.0
