@@ -118,9 +118,9 @@ LOT_PER_STEP = 0.01
 ENABLED = true
 ; soglia di taglio in % della perdita giornaliera consentita
 CUT_LOSS_PERCENT = 2.5
-INTERVAL_SECONDS = 15
+INTERVAL_SECONDS = 60
 ; anti-churn: età minima e filtro spread
-MIN_AGE_SECONDS = 60
+MIN_AGE_SECONDS = 300
 SPREAD_FACTOR = 2
 ; blackout dei tagli attorno alle notizie ad alto impatto
 NEWS_BLACKOUT = true

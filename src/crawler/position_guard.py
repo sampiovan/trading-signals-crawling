@@ -209,7 +209,7 @@ async def check_positions_once(client):
 	if cut_loss is None:
 		logger.warning("Guardia: deposito iniziale non disponibile, soglia non calcolabile: passata saltata.")
 		return
-	min_age = float(_guard_setting('MIN_AGE_SECONDS', '60') or 0)
+	min_age = float(_guard_setting('MIN_AGE_SECONDS', '300') or 0)
 	spread_factor = float(_guard_setting('SPREAD_FACTOR', '2') or 0)
 
 	for pos in (mt5.positions_get() or ()):
@@ -245,7 +245,7 @@ async def run_guard(client, news_cache_path=None):
 		logger.info("Guardia posizioni disabilitata da config ([guard] ENABLED).")
 		return
 
-	interval = float(_guard_setting('INTERVAL_SECONDS', '15') or 15)
+	interval = float(_guard_setting('INTERVAL_SECONDS', '60') or 60)
 	cut_loss = _cut_loss_threshold()
 	threshold = f"-{cut_loss:.0f}" if cut_loss is not None else "deposito non ancora noto"
 	cut_percent = _cut_loss_percent()

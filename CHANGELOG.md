@@ -19,6 +19,12 @@ giornaliero** (5% del deposito iniziale, con stop delle aperture all'80% del bud
   frazione nota e costante del budget anche quando il balance (e i lotti del
   sizing BALANCE) cresce. Migrazione: il vecchio `CUT_LOSS = 125` equivale a
   `CUT_LOSS_PERCENT = 2.5` con deposito 100k e limite giornaliero del 5%.
+- Default della guardia più conservativi, allineati ai valori in uso:
+  `INTERVAL_SECONDS` da 15 a 60 (un check al minuto basta: il taglio non è
+  un'operazione da tempo di reazione) e `MIN_AGE_SECONDS` da 60 a 300 (l'età
+  minima fa anche da pausa tra un taglio e l'altro, e a 60s le riaperture si
+  susseguivano troppo in fretta). Chi li aveva già espliciti in config non è
+  toccato.
 
 ### Fixed
 - Scrittura atomica di `crawler_state.json` (file temporaneo + rename): un crash a

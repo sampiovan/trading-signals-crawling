@@ -165,7 +165,7 @@ def test_foreign_positions_are_ignored(monkeypatch):
 # ----- anti-churn: età minima, cooldown per simbolo, filtro spread -----
 
 def test_young_position_is_left_alone(monkeypatch):
-    # Aperta da 10s (< MIN_AGE_SECONDS=60): parte in perdita dello spread
+    # Aperta da 10s (< MIN_AGE_SECONDS=300): parte in perdita dello spread
     # ma la guardia non la tocca — il caso del loop con spread alto
     fake = use(monkeypatch, FakeMT5(
         positions=[position(profit=-130.0, time=SERVER_NOW - 10)]))
