@@ -27,11 +27,22 @@ def _load_state(path):
 
 
 def _save_state(state, path):
+	"""
+	Scrittura ATOMICA (file temporaneo + os.replace): un crash a metà
+	scrittura non deve mai corrompere lo stato esistente — file corrotto
+	= catch-up che riparte "da primo avvio" saltando i segnali persi.
+	"""
+	tmp_path = f"{path}.tmp"
 	try:
-		with open(path, 'w', encoding='utf-8') as f:
+		with open(tmp_path, 'w', encoding='utf-8') as f:
 			json.dump(state, f)
+		os.replace(tmp_path, path)
 	except OSError:
 		logger.exception(f"Impossibile salvare lo stato del crawler su {path}.")
+		try:
+			os.remove(tmp_path)
+		except OSError:
+			pass
 
 
 def load_last_message_id(path=STATE_FILENAME):

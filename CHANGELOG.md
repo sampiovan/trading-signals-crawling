@@ -10,6 +10,16 @@ Il formato segue [Keep a Changelog](https://keepachangelog.com/it-IT/1.1.0/) e i
 In roadmap: **multi-canale** (impostazioni e rischio per canale) e **budget di perdita
 giornaliero** (5% del deposito iniziale, con stop delle aperture all'80% del budget).
 
+### Fixed
+- Scrittura atomica di `crawler_state.json` (file temporaneo + rename): un crash a
+  metà scrittura corrompeva lo stato e al riavvio il catch-up ripartiva "da primo
+  avvio", saltando in silenzio i segnali persi durante il downtime.
+- Niente posizioni duplicate al riavvio dopo un crash: l'ordine viene eseguito
+  prima del salvataggio dello stato, quindi il replay del catch-up poteva
+  rieseguire un placement/open a mercato. Ora in catch-up i segnali che aprono
+  esposizione vengono saltati se un ordine live corrisponde già (lookup per
+  commento "@prezzo", l'identificatore stabile del segnale).
+
 ## [2.2.0] - 2026-07-16
 
 ### Added
