@@ -10,6 +10,16 @@ Il formato segue [Keep a Changelog](https://keepachangelog.com/it-IT/1.1.0/) e i
 In roadmap: **multi-canale** (impostazioni e rischio per canale) e **budget di perdita
 giornaliero** (5% del deposito iniziale, con stop delle aperture all'80% del budget).
 
+### Changed
+- Soglia della guardia in percentuale del budget giornaliero: `CUT_LOSS` (importo
+  fisso in valuta del conto) sostituita da `CUT_LOSS_PERCENT` (default 2.5),
+  percentuale della perdita giornaliera consentita = `DAILY_LOSS_PERCENT`
+  (nuova chiave `[risk]`, default 5 — regola FTMO) del deposito iniziale.
+  Il budget è calcolato sul deposito iniziale, quindi ogni taglio consuma una
+  frazione nota e costante del budget anche quando il balance (e i lotti del
+  sizing BALANCE) cresce. Migrazione: il vecchio `CUT_LOSS = 125` equivale a
+  `CUT_LOSS_PERCENT = 2.5` con deposito 100k e limite giornaliero del 5%.
+
 ### Fixed
 - Scrittura atomica di `crawler_state.json` (file temporaneo + rename): un crash a
   metà scrittura corrompeva lo stato e al riavvio il catch-up ripartiva "da primo

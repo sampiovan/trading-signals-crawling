@@ -1,8 +1,12 @@
 """
 Guardia delle posizioni aperte in perdita: quando la perdita di prezzo di
-una posizione del crawler supera la soglia (config [guard] CUT_LOSS,
-default 125 nella valuta del conto), la posizione viene CHIUSA e RIAPERTA
-immediatamente a mercato con stessi direzione/volume/SL/TP/magic.
+una posizione del crawler supera la soglia di taglio, la posizione viene
+CHIUSA e RIAPERTA immediatamente a mercato con stessi direzione/volume/
+SL/TP/magic. La soglia è una frazione della perdita giornaliera consentita
+(config [guard] CUT_LOSS_PERCENT, default 2.5): il budget giornaliero è
+DAILY_LOSS_PERCENT (config [risk], default 5 — regola FTMO) del deposito
+iniziale, quindi resta FISSO in valuta anche quando il balance cresce e
+ogni taglio consuma una frazione nota e costante del budget.
 
 Il commento della nuova posizione conserva il prezzo di apertura ORIGINALE
 del canale e accumula la perdita realizzata (interi, INCLUSI swap e
@@ -22,7 +26,7 @@ innescherebbe un ciclo di chiusure/riaperture che paga lo spread a ogni
 giro. Due protezioni ([guard] in config): le posizioni più giovani di
 MIN_AGE_SECONDS non vengono toccate (ogni riaperta è una posizione
 nuova, quindi l'età minima fa anche da pausa tra un taglio e l'altro) e
-il taglio è rinviato finché CUT_LOSS non supera SPREAD_FACTOR volte il
+il taglio è rinviato finché la soglia non supera SPREAD_FACTOR volte il
 costo corrente dello spread. L'età è confrontata in tempo SERVER
 (pos.time e tick.time), mai con l'orologio locale.
 
@@ -35,7 +39,7 @@ messaggi Telegram (parsing ed esecuzione dei segnali) non è toccata.
 import asyncio
 import logging
 
-from crawler import executor, news_calendar
+from crawler import executor, news_calendar, risk
 from crawler.comments import parse_comment, format_loss_comment, format_price_comment
 from crawler.config import load_config, get_setting
 
@@ -64,6 +68,22 @@ def _guard_setting(key, default):
 
 def _guard_flag(key, default):
 	return _guard_setting(key, default).lower() in _TRUE_VALUES
+
+
+def _cut_loss_percent():
+	return float(_guard_setting('CUT_LOSS_PERCENT', '2.5') or 2.5)
+
+
+def _cut_loss_threshold():
+	"""
+	Soglia di taglio in valuta del conto: CUT_LOSS_PERCENT % della perdita
+	giornaliera consentita (risk.daily_loss_budget). None se il deposito
+	iniziale non è ancora noto.
+	"""
+	budget = risk.daily_loss_budget()
+	if budget is None:
+		return None
+	return budget * _cut_loss_percent() / 100
 
 
 async def _alert(client, text):
@@ -185,7 +205,10 @@ async def check_positions_once(client):
 	if _in_news_blackout():
 		return
 
-	cut_loss = float(_guard_setting('CUT_LOSS', '125') or 125)
+	cut_loss = _cut_loss_threshold()
+	if cut_loss is None:
+		logger.warning("Guardia: deposito iniziale non disponibile, soglia non calcolabile: passata saltata.")
+		return
 	min_age = float(_guard_setting('MIN_AGE_SECONDS', '60') or 0)
 	spread_factor = float(_guard_setting('SPREAD_FACTOR', '2') or 0)
 
@@ -223,8 +246,13 @@ async def run_guard(client, news_cache_path=None):
 		return
 
 	interval = float(_guard_setting('INTERVAL_SECONDS', '15') or 15)
-	cut_loss = _guard_setting('CUT_LOSS', '125')
-	logger.info(f"Guardia posizioni attiva: taglio a -{cut_loss}, check ogni {interval:.0f}s.")
+	cut_loss = _cut_loss_threshold()
+	threshold = f"-{cut_loss:.0f}" if cut_loss is not None else "deposito non ancora noto"
+	cut_percent = _cut_loss_percent()
+	logger.info(
+		f"Guardia posizioni attiva: taglio al {cut_percent:g}% "
+		f"del budget giornaliero ({threshold}), check ogni {interval:.0f}s."
+	)
 
 	news_enabled = _guard_flag('NEWS_BLACKOUT', 'true') and news_cache_path is not None
 

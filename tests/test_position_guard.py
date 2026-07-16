@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from crawler import executor, mt5_client, news_calendar, position_guard
+from crawler import executor, mt5_client, news_calendar, position_guard, risk
 from crawler.executor import TRADE_ACTION_DEAL, RETCODE_DONE
 from crawler.position_guard import check_positions_once
 
@@ -85,10 +85,15 @@ class FakeClient:
 
 @pytest.fixture(autouse=True)
 def wire_stub(monkeypatch):
-    """Config con soglia 125, stub condiviso guardia+executor, niente attese."""
-    values = {'CUT_LOSS': '125', 'INTERVAL_SECONDS': '15', 'ENABLED': 'true'}
+    """Config con soglia 125 (2.5% del budget 5% su 100k), stub condiviso guardia+executor."""
+    values = {'CUT_LOSS_PERCENT': '2.5', 'DAILY_LOSS_PERCENT': '5',
+              'INTERVAL_SECONDS': '15', 'ENABLED': 'true'}
+    monkeypatch.setattr(risk, '_initial_deposit', 100000.0)
     monkeypatch.setattr(position_guard, 'load_config', lambda: None)
     monkeypatch.setattr(position_guard, 'get_setting',
+                        lambda cfg, section, key, default='': values.get(key, default))
+    monkeypatch.setattr(risk, 'load_config', lambda: None)
+    monkeypatch.setattr(risk, 'get_setting',
                         lambda cfg, section, key, default='': values.get(key, default))
     monkeypatch.setattr(executor, 'load_config', lambda: None)
     monkeypatch.setattr(executor, 'get_mt5_setting', lambda cfg, key, default='': default)
@@ -121,6 +126,31 @@ def test_position_above_threshold_is_left_alone(monkeypatch):
     assert fake.sent_requests == []
 
 
+def test_threshold_scales_with_initial_deposit(monkeypatch):
+    # Deposito 200k -> budget giornaliero 5% = 10k -> soglia 2.5% = 250:
+    # una perdita di 130 (che a 100k verrebbe tagliata) resta sotto soglia,
+    # una oltre i 250 viene tagliata
+    monkeypatch.setattr(risk, '_initial_deposit', 200000.0)
+    fake = use(monkeypatch, FakeMT5(positions=[position(profit=-130.0)]))
+    run(check_positions_once(FakeClient()))
+    assert fake.sent_requests == []
+
+    fake = use(monkeypatch, FakeMT5(
+        positions=[position(profit=-260.0)],
+        deals=[deal(entry=ENTRY_IN), deal(profit=-260.0)]))
+    run(check_positions_once(FakeClient()))
+    assert len(fake.sent_requests) == 2  # chiusura + riapertura
+
+
+def test_missing_initial_deposit_skips_pass(monkeypatch, caplog):
+    # Senza deposito iniziale la soglia non è calcolabile: mai tagliare
+    monkeypatch.setattr(risk, '_initial_deposit', None)
+    fake = use(monkeypatch, FakeMT5(positions=[position(profit=-500.0)]))
+    run(check_positions_once(FakeClient()))
+    assert fake.sent_requests == []
+    assert 'soglia non calcolabile' in caplog.text
+
+
 def test_foreign_positions_are_ignored(monkeypatch):
     # Perdita profonda ma commento non nostro: la guardia non la tocca
     fake = use(monkeypatch, FakeMT5(positions=[position(profit=-500.0, comment="trade manuale")]))
@@ -140,7 +170,7 @@ def test_young_position_is_left_alone(monkeypatch):
 
 
 def test_wide_spread_defers_cut(monkeypatch):
-    # Spread 0.01 su 0.10 lotti -> costo 100; CUT_LOSS 125 <= 2x100: rinviato
+    # Spread 0.01 su 0.10 lotti -> costo 100; soglia 125 <= 2x100: rinviato
     fake = use(monkeypatch, FakeMT5(
         positions=[position(profit=-130.0)],
         tick=SimpleNamespace(ask=1.2100, bid=1.2000, time=SERVER_NOW)))
@@ -191,7 +221,7 @@ def test_news_blackout_suspends_guard_on_all_assets(monkeypatch):
 
 
 def test_news_blackout_disabled_cuts(monkeypatch):
-    values = {'CUT_LOSS': '125', 'NEWS_BLACKOUT': 'false'}
+    values = {'NEWS_BLACKOUT': 'false'}
     monkeypatch.setattr(position_guard, 'get_setting',
                         lambda cfg, section, key, default='': values.get(key, default))
     monkeypatch.setattr(news_calendar, '_events', [_high_impact_event_now("USD")])
