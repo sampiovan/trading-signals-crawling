@@ -4,9 +4,9 @@ una posizione del crawler supera la soglia di taglio, la posizione viene
 CHIUSA e RIAPERTA immediatamente a mercato con stessi direzione/volume/
 SL/TP/magic. La soglia è una frazione della perdita giornaliera consentita
 (config [guard] CUT_LOSS_PERCENT, default 2.5): il budget giornaliero è
-DAILY_LOSS_PERCENT (config [risk], default 5 — regola FTMO) del deposito
-iniziale, quindi resta FISSO in valuta anche quando il balance cresce e
-ogni taglio consuma una frazione nota e costante del budget.
+DAILY_LOSS_PERCENT (config [risk], default 5) del deposito iniziale,
+quindi resta FISSO in valuta anche quando il balance cresce e ogni taglio
+consuma una frazione nota e costante del budget.
 
 Il commento della nuova posizione conserva il prezzo di apertura ORIGINALE
 del canale e accumula la perdita realizzata (interi, INCLUSI swap e

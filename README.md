@@ -107,7 +107,7 @@ FIXED_LOT = 0.01
 RISK_PERCENT = 1.0
 ; deposito iniziale: vuoto = rilevato dal balance al primo avvio e persistito
 INITIAL_DEPOSIT =
-; perdita giornaliera consentita in % del deposito iniziale (regola FTMO)
+; perdita giornaliera consentita in % del deposito iniziale
 DAILY_LOSS_PERCENT = 5
 AVAILABLE_PERCENT = 10
 BALANCE_STEP = 1000
@@ -141,7 +141,7 @@ In tutti i casi il volume è normalizzato sui limiti del simbolo (min/max/step d
 
 Un controllo periodico ([position_guard.py](src/crawler/position_guard.py), ogni `INTERVAL_SECONDS`) sorveglia le posizioni aperte dal crawler (riconosciute dal commento `@prezzo`): quando la **perdita di prezzo** di una posizione (esclusi swap e commissioni) supera la soglia di taglio, la posizione viene **chiusa e riaperta immediatamente** a mercato con stessi direzione, volume, SL, TP e magic number. Il commento della nuova posizione conserva il prezzo originale del canale e accumula la perdita realizzata — inclusi swap e commissioni, arrotondata agli interi: `@1.3390 (-120)`, poi `@1.3390 (-245)` a un secondo taglio. I segnali successivi del canale (chiusura, move SL) ritrovano la posizione riaperta proprio grazie al commento. La guardia **adotta** anche le posizioni legacy del vecchio executor (commento `placement`/`open`) e quelle senza commento (es. aperte a mano): al primo taglio il loro prezzo di apertura reale diventa il prezzo del commento e la riaperta nasce già nel formato `@prezzo (-N)`. Le posizioni con commenti di altri sistemi non vengono mai toccate. Se la riapertura fallisce, arriva un alert nei Saved Messages con i dati per riaprire a mano.
 
-La soglia di taglio è `CUT_LOSS_PERCENT` (default 2.5) **per cento della perdita giornaliera consentita**, cioè `DAILY_LOSS_PERCENT` (`[risk]`, default 5 — regola FTMO) per cento del deposito iniziale: con deposito 100k e limite 5% il budget giornaliero è 5000 e il taglio scatta a −125. Poiché il budget è calcolato sul deposito iniziale, la soglia resta **fissa in valuta** anche quando il balance (e quindi i lotti del sizing BALANCE) cresce: ogni taglio consuma una frazione nota e costante del budget giornaliero.
+La soglia di taglio è `CUT_LOSS_PERCENT` (default 2.5) **per cento della perdita giornaliera consentita**, cioè `DAILY_LOSS_PERCENT` (`[risk]`, default 5) per cento del deposito iniziale: con deposito 100k e limite 5% il budget giornaliero è 5000 e il taglio scatta a −125. Il default riflette il limite di perdita giornaliera tipico dei conti di prop firm; su un conto senza vincoli va impostato alla propria tolleranza. Poiché il budget è calcolato sul deposito iniziale, la soglia resta **fissa in valuta** anche quando il balance (e quindi i lotti del sizing BALANCE) cresce: ogni taglio consuma una frazione nota e costante del budget giornaliero.
 
 Due protezioni **anti-churn** evitano il ciclo di tagli/riaperture nei momenti di spread largo (una posizione appena aperta parte già in perdita dello spread, e ogni riapertura lo ripaga): le posizioni più giovani di `MIN_AGE_SECONDS` non vengono toccate — e poiché ogni riaperta è una posizione nuova, l'età minima fa anche da pausa tra un taglio e l'altro — e il taglio è rinviato (con warning nel log) finché la soglia di taglio non supera `SPREAD_FACTOR` volte il costo corrente dello spread per il volume della posizione. L'età è misurata in tempo server del broker, non con l'orologio locale; ogni protezione si disattiva col valore `0`.
 
