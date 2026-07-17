@@ -20,8 +20,11 @@ def message(msg_id=100, text="segnale"):
 
 
 class FakeClient:
+    def __init__(self):
+        self.alerts = []
+
     async def send_message(self, target, text):
-        pass
+        self.alerts.append((target, text))
 
 
 @pytest.fixture
@@ -93,6 +96,23 @@ def test_catchup_skips_market_open_already_executed(pipeline):
     pipeline.live_ticket = "555"
     process(pipeline, catching_up=True)
     assert pipeline.executed == []
+
+
+def test_order_not_found_alerts_telegram(pipeline, monkeypatch):
+    # Segnale riconosciuto ma ordine non trovato (es. refuso dell'asset nel
+    # canale): lo scarto deve arrivare nei Saved Messages, non solo nel log
+    def raise_not_found(text, reply_text=None):
+        raise crawler_main.OrderNotFoundException(
+            "Order ID non trovato per segnale close: asset=GPSUSD, entry=1.34946")
+    monkeypatch.setattr(crawler_main, 'parse_message', raise_not_found)
+
+    client = FakeClient()
+    asyncio.run(crawler_main.process_message(client, message(), pipeline.state_path))
+
+    assert client.alerts and "GPSUSD" in client.alerts[0][1]
+    assert pipeline.executed == []
+    from crawler.crawler_state import load_last_message_id
+    assert load_last_message_id(path=pipeline.state_path) == 100  # lo stato avanza
 
 
 def test_catchup_close_is_never_deduplicated(pipeline):

@@ -10,6 +10,15 @@ Il formato segue [Keep a Changelog](https://keepachangelog.com/it-IT/1.1.0/) e i
 In roadmap: **multi-canale** (impostazioni e rischio per canale) e **budget di perdita
 giornaliero** (5% del deposito iniziale, con stop delle aperture all'80% del budget).
 
+### Fixed
+- Refuso dell'asset nel canale (es. "GPS/USD" per GBP/USD) non fa più perdere il
+  segnale: se il simbolo non è risolvibile, il lookup ripiega sul commento
+  "@prezzo" cercandolo su tutte le posizioni e i pending del conto (col pip del
+  simbolo reale di ogni candidato) e procede solo con un match univoco.
+- Lo scarto di un segnale per ordine non trovato ora arriva anche nei Saved
+  Messages di Telegram, come i fallimenti di esecuzione: una chiusura persa
+  non passa più inosservata nel solo log.
+
 ### Changed
 - Soglia della guardia in percentuale del budget giornaliero: `CUT_LOSS` (importo
   fisso in valuta del conto) sostituita da `CUT_LOSS_PERCENT` (default 2.5),
