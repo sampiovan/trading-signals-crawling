@@ -21,17 +21,21 @@ from crawler.position_guard import run_guard
 logger = logging.getLogger("crawler")
 
 
-async def notify_failure(client, signal, outcome):
-	"""Notifica un fallimento definitivo nei Saved Messages di Telegram."""
-	text = (
-		"⚠️ Esecuzione segnale FALLITA\n"
-		f"Tipo: {signal['message_type']} {signal['signal_type']} {signal['asset']}\n"
-		f"Dettaglio: {outcome.message} (retcode={outcome.retcode})"
-	)
+async def _alert(client, text):
+	"""Notifica nei Saved Messages di Telegram (best effort)."""
 	try:
 		await client.send_message('me', text)
 	except Exception:
-		logger.exception("Impossibile inviare la notifica Telegram del fallimento.")
+		logger.exception("Impossibile inviare la notifica Telegram.")
+
+
+async def notify_failure(client, signal, outcome):
+	"""Notifica un fallimento definitivo nei Saved Messages di Telegram."""
+	await _alert(client, (
+		"⚠️ Esecuzione segnale FALLITA\n"
+		f"Tipo: {signal['message_type']} {signal['signal_type']} {signal['asset']}\n"
+		f"Dettaglio: {outcome.message} (retcode={outcome.retcode})"
+	))
 
 
 def _already_executed(signal):
@@ -79,8 +83,11 @@ async def process_message(client, message, state_path, catching_up=False):
 	try:
 		signals = parse_message(message_text, reply_text=reply_text)
 	except OrderNotFoundException as e:
-		# Segnale riconosciuto ma ordine non trovato tra posizioni/pending live
+		# Segnale riconosciuto ma ordine non trovato tra posizioni/pending
+		# live: scarto definitivo, quindi va notificato come i fallimenti
+		# di esecuzione (es. una chiusura persa non deve passare inosservata)
 		logger.error(f"Ordine non trovato sul conto, segnale scartato: {e}")
+		await _alert(client, f"⚠️ Segnale SCARTATO: ordine non trovato sul conto\nDettaglio: {e}")
 		signals = None
 	except Exception:
 		logger.exception("Errore inatteso nel parsing del messaggio, segnale scartato.")

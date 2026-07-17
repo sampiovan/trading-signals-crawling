@@ -40,6 +40,43 @@ def pip_size(asset):
 	return 0.0001
 
 
+def _comment_fallback(target_asset, entry, target_signal):
+	"""
+	Asset non risolvibile (refuso del canale, es. "GPS/USD" per GBP/USD):
+	il commento "@prezzo" resta un identificatore affidabile del segnale,
+	quindi viene cercato su TUTTE le posizioni e i pending del conto,
+	formattando il prezzo col pip del simbolo REALE di ogni candidato.
+	Si procede solo con un match UNIVOCO: con zero o più candidati il
+	segnale resta scartato come prima.
+	"""
+	matches = []
+	candidates = tuple(mt5.positions_get() or ()) + tuple(mt5.orders_get() or ())
+	for item in candidates:
+		if target_signal and _MT5_TYPE_TO_SIGNAL.get(item.type, '') != target_signal:
+			continue
+		parsed = parse_comment(getattr(item, 'comment', ''))
+		if parsed is None:
+			continue
+		try:
+			expected = format_price_comment(item.symbol, entry).lstrip('@')
+		except (TypeError, ValueError):
+			continue
+		if parsed[0] == expected:
+			matches.append((item, parsed[0]))
+
+	if len(matches) == 1:
+		found, comment_price = matches[0]
+		logger.warning(
+			f"Lookup: asset {target_asset} non risolvibile, ma il commento @{comment_price} "
+			f"identifica in modo univoco {found.symbol} ticket {found.ticket}: uso quello."
+		)
+		return str(found.ticket), str(found.magic)
+
+	ambiguous = f" e commento ambiguo ({len(matches)} candidati)" if matches else ""
+	logger.warning(f"Lookup: simbolo non risolvibile per asset {target_asset}{ambiguous}.")
+	return None, None
+
+
 def get_order_ticket(asset, entry, signal_type, tol_pips=2):
 	"""
 	Cerca tra le posizioni aperte e gli ordini pendenti live quello che
@@ -61,8 +98,7 @@ def get_order_ticket(asset, entry, signal_type, tol_pips=2):
 	try:
 		symbol = mt5_client.resolve_symbol(target_asset)
 	except Exception:
-		logger.warning(f"Lookup: simbolo non risolvibile per asset {target_asset}.")
-		return None, None
+		return _comment_fallback(target_asset, entry, target_signal)
 
 	# Il commento "@prezzo" è l'identificatore stabile del segnale: dopo un
 	# cut&reopen della guardia il price_open reale diverge dal prezzo del

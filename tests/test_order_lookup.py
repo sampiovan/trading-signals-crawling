@@ -111,11 +111,45 @@ def test_lookup_comment_match_beats_price_match(monkeypatch):
     assert get_order_ticket("EURUSD", "1.12500", "BUY") == ("2", "22222")
 
 
-def test_lookup_unresolvable_symbol_returns_none(monkeypatch):
-    use(monkeypatch, FakeMT5())
-
+def unresolvable_symbols(monkeypatch):
     def boom(asset):
         raise ValueError("simbolo inesistente")
-
     monkeypatch.setattr(mt5_client, 'resolve_symbol', boom)
+
+
+def test_lookup_unresolvable_symbol_returns_none(monkeypatch):
+    use(monkeypatch, FakeMT5())
+    unresolvable_symbols(monkeypatch)
     assert get_order_ticket("XXXYYY", "1.0", "") == (None, None)
+
+
+def test_lookup_unresolvable_symbol_falls_back_to_comment(monkeypatch):
+    # Il caso reale: il canale scrive "GPS/USD" per GBP/USD. Il simbolo non
+    # si risolve, ma il commento "@prezzo" (1.34946 -> @1.3495) identifica
+    # la posizione in modo univoco su tutto il conto
+    use(monkeypatch, FakeMT5(positions=[
+        position(900020, "GBPUSD", 1.35340, SELL, 99599, comment="@1.3495 (-82)"),
+    ]))
+    unresolvable_symbols(monkeypatch)
+    assert get_order_ticket("GPSUSD", "1.34946", "") == ("900020", "99599")
+
+
+def test_lookup_comment_fallback_requires_unique_match(monkeypatch):
+    # Stesso prezzo di commento su due simboli diversi: ambiguo, si scarta
+    use(monkeypatch, FakeMT5(positions=[
+        position(1, "GBPUSD", 1.35340, SELL, 111, comment="@1.3495"),
+        position(2, "EURUSD", 1.34960, BUY, 222, comment="@1.3495"),
+    ]))
+    unresolvable_symbols(monkeypatch)
+    assert get_order_ticket("GPSUSD", "1.34946", "") == (None, None)
+
+
+def test_lookup_comment_fallback_uses_real_symbol_pip(monkeypatch):
+    # Refuso su una coppia JPY ("USDJPI"): il prezzo del commento va
+    # arrotondato col pip del simbolo REALE del candidato (2 decimali),
+    # non con l'euristica sull'asset sbagliato (4 decimali)
+    use(monkeypatch, FakeMT5(positions=[
+        position(900030, "USDJPY", 145.700, SELL, 44444, comment="@145.50 (-30)"),
+    ]))
+    unresolvable_symbols(monkeypatch)
+    assert get_order_ticket("USDJPI", "145.503", "") == ("900030", "44444")
