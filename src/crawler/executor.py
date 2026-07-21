@@ -14,7 +14,7 @@ from collections import namedtuple
 from crawler import mt5_client
 from crawler.comments import format_price_comment
 from crawler.config import load_config, get_mt5_setting
-from crawler.risk import compute_lot
+from crawler.risk import compute_lot, grow_volume_to_balance
 
 try:
 	import MetaTrader5 as mt5
@@ -260,7 +260,8 @@ def _do_modify(signal):
 			return {
 				'action': TRADE_ACTION_PENDING,
 				'symbol': order.symbol,
-				'volume': order.volume_current,
+				'volume': grow_volume_to_balance(signal, order.volume_current,
+				                                 mt5.symbol_info(order.symbol), mt5.account_info()),
 				'type': order.type,
 				'price': new_price,
 				'sl': new_sl,

@@ -86,6 +86,8 @@ def wire_stub(monkeypatch):
     monkeypatch.setattr(executor, 'get_mt5_setting',
                         lambda cfg, key, default='': default)
     monkeypatch.setattr(executor, 'compute_lot', lambda signal, si, ai: 0.01)
+    # Default: la modifica di un pending mantiene il volume originale
+    monkeypatch.setattr(executor, 'grow_volume_to_balance', lambda signal, vol, si, ai: vol)
     monkeypatch.setattr(executor.time, 'sleep', lambda s: None)
     monkeypatch.setattr(mt5_client, 'resolve_symbol', lambda asset: asset)
 
@@ -188,6 +190,20 @@ def test_modify_pending_removes_and_replaces_with_new_comment(monkeypatch):
     assert place_req['sl'] == 1.05 and place_req['tp'] == 1.30  # 0 = invariato
     assert place_req['volume'] == 0.05 and place_req['magic'] == 54321  # ereditati dal pending
     assert place_req['comment'] == '@1.1300'  # commento aggiornato al nuovo prezzo
+
+
+def test_modify_pending_grows_volume_when_balance_allows(monkeypatch):
+    # In MODE=BALANCE, se il conto è cresciuto, il pending ripiazzato usa la
+    # size aggiornata (grow_volume_to_balance) al posto del volume originale
+    monkeypatch.setattr(executor, 'grow_volume_to_balance', lambda signal, vol, si, ai: 0.09)
+    fake = use(monkeypatch, FakeMT5(send_results=[result(RETCODE_DONE), result(RETCODE_DONE, order=888)],
+                                    orders=[pending(ticket=666, volume_current=0.01)]))
+    outcome = execute(make_signal(message_type='modify', order_id='666',
+                                  entry='1.13000', sl=0, tp=0))
+    assert outcome.ok
+    _, place_req = fake.sent_requests
+    assert place_req['volume'] == 0.09  # size aggiornata, non lo 0.01 originale
+    assert place_req['price'] == 1.13 and place_req['comment'] == '@1.1300'
 
 
 def test_modify_pending_replace_failure_is_critical(monkeypatch):
