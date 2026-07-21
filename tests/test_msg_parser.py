@@ -40,6 +40,21 @@ MSG_OPEN_LIVELLO = (
     "Livello di ingresso   1.33900\n"
 )
 
+# Variante reale con refuso live il 2026-07-21 (msg id=361): spazio DENTRO il prezzo
+MSG_OPEN_SPACED_PRICE = (
+    "Ordine Sell  AUD/NZD   Aperto\n"
+    "\n"
+    "Livello di ingresso   1. 20200\n"
+)
+
+# Placement AUD/NZD col prezzo corretto: il messaggio citato dal reply del msg id=361
+MSG_PLACEMENT_AUDNZD = (
+    "📉SELL LIMIT  AUD/NZD\n"
+    " Prezzo 1.20200  (di apertura)\n"
+    " Stop Loss   🔴 1.21500\n"
+    " Take Profit  🟢  1.18000"
+)
+
 MSG_MODIFY = (
     "(BUY LIMIT EUR/USD) - MODIFICARE IL PREZZO DI INGRESSO DA 1.12500 A  1.13000"
     "  mantenendo uguale Stop loss e Take Profit 👍✅"
@@ -107,6 +122,23 @@ def test_placement_ignores_other_messages():
     assert parse_order_placement(MSG_OPEN) is None
 
 
+# ----- normalizzazione del prezzo (tutti i tipi di messaggio) -----
+
+def test_clean_price_strips_internal_whitespace():
+    assert msg_parser._clean_price("1. 20200") == "1.20200"
+    assert msg_parser._clean_price("1.20200") == "1.20200"
+    assert msg_parser._clean_price("1 . 20200") == "1.20200"
+    assert msg_parser._clean_price("1.20200\t") == "1.20200"
+
+
+def test_placement_normalizes_spaced_price():
+    # La difesa è sistematica, non solo sugli "Aperto": un refuso nel prezzo
+    # di un placement viene ripulito allo stesso modo
+    spaced = MSG_PLACEMENT.replace("1.12500", "1. 12500")
+    result = parse_order_placement(spaced)
+    assert result['entry'] == '1.12500'
+
+
 # ----- parse_order_open -----
 
 def test_open_with_known_pending(monkeypatch):
@@ -125,14 +157,61 @@ def test_open_with_known_pending(monkeypatch):
     assert result['magic_number'] == '54321'
 
 
-def test_open_without_registry_match_is_direct_market_order(monkeypatch):
+def test_open_without_pending_is_discarded(monkeypatch):
+    # Un "Aperto" è la notifica di riempimento di un pending, non un comando
+    # di apertura: se il pending non si trova NON si apre a mercato alla cieca
+    # (rischio duplicato), si solleva OrderNotFoundException -> scarto + alert
     monkeypatch.setattr(msg_parser, 'get_order_ticket', lambda *a: (None, None))
-    result = parse_order_open(MSG_OPEN)
+    with pytest.raises(OrderNotFoundException):
+        parse_order_open(MSG_OPEN)
 
-    # Nessuna eccezione: order_id vuoto segnala all'EA un ordine diretto a mercato
+
+def test_open_spaced_price_is_normalized_before_lookup(monkeypatch):
+    # Il refuso "1. 20200" non deve troncare il prezzo a "1.": va normalizzato
+    # a "1.20200" prima del lookup, così il pending viene ritrovato
+    calls = {}
+
+    def fake_lookup(asset, entry, signal_type):
+        calls['args'] = (asset, entry, signal_type)
+        return '123456', '54321'
+
+    monkeypatch.setattr(msg_parser, 'get_order_ticket', fake_lookup)
+    result = parse_order_open(MSG_OPEN_SPACED_PRICE)
+
+    assert calls['args'] == ('AUDNZD', '1.20200', 'SELL')
+    assert result['order_id'] == '123456'
+
+
+def test_open_reply_resolves_order_even_if_own_price_garbled(monkeypatch):
+    # Il messaggio "Aperto" arriva come reply al placement: il prezzo del reply
+    # (corretto) identifica l'ordine anche se quello del messaggio è illeggibile
+    lookups = []
+
+    def fake_lookup(asset, entry, signal_type):
+        lookups.append((asset, entry))
+        return '424242', '31337'
+
+    monkeypatch.setattr(msg_parser, 'get_order_ticket', fake_lookup)
+    result = parse_order_open(MSG_OPEN_SPACED_PRICE, reply_text=MSG_PLACEMENT_AUDNZD)
+
+    assert ('AUDNZD', '1.20200') in lookups
     assert result['message_type'] == 'open'
-    assert result['order_id'] == ''
-    assert result['magic_number'].isdigit() and len(result['magic_number']) == 5
+    assert result['order_id'] == '424242'
+
+
+def test_open_reply_asset_mismatch_falls_back_to_own_price(monkeypatch):
+    calls = {}
+
+    def fake_lookup(asset, entry, signal_type):
+        calls['args'] = (asset, entry, signal_type)
+        return '123456', '54321'
+
+    monkeypatch.setattr(msg_parser, 'get_order_ticket', fake_lookup)
+    # Reply su un asset diverso: si ignora e si usa l'entry del messaggio stesso
+    result = parse_order_open(MSG_OPEN, reply_text=MSG_PLACEMENT_AUDNZD)
+
+    assert calls['args'] == ('EURUSD', '1.12500', 'BUY')
+    assert result['order_id'] == '123456'
 
 
 def test_open_with_livello_di_ingresso_variant(monkeypatch):
@@ -152,11 +231,25 @@ def test_open_with_livello_di_ingresso_variant(monkeypatch):
 
 
 def test_open_livello_variant_via_dispatcher(monkeypatch):
-    monkeypatch.setattr(msg_parser, 'get_order_ticket', lambda *a: (None, None))
+    calls = {}
+
+    def fake_lookup(asset, entry, signal_type):
+        calls['args'] = (asset, entry, signal_type)
+        return '123456', '54321'
+
+    monkeypatch.setattr(msg_parser, 'get_order_ticket', fake_lookup)
     signals = parse_message(MSG_OPEN_LIVELLO)
     assert len(signals) == 1
     assert signals[0]['message_type'] == 'open'
-    assert signals[0]['order_id'] == ''  # nessun pending: ordine diretto a mercato
+    assert signals[0]['order_id'] == '123456'
+
+
+def test_open_without_pending_via_dispatcher_discards(monkeypatch):
+    # Il dispatcher propaga OrderNotFoundException: main.py la cattura,
+    # scarta il segnale e avvisa su Telegram (nessun ordine a mercato)
+    monkeypatch.setattr(msg_parser, 'get_order_ticket', lambda *a: (None, None))
+    with pytest.raises(OrderNotFoundException):
+        parse_message(MSG_OPEN_LIVELLO)
 
 
 # ----- parse_order_modify -----

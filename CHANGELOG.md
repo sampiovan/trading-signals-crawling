@@ -11,6 +11,15 @@ In roadmap: **multi-canale** (impostazioni e rischio per canale) e **budget di p
 giornaliero** (5% del deposito iniziale, con stop delle aperture all'80% del budget).
 
 ### Fixed
+- Messaggio "Aperto" non duplica più la posizione: era la notifica di riempimento
+  di un pending ma, se il lookup non lo trovava, apriva un ordine a mercato nuovo.
+  Ora un "Aperto" arrivato come risposta Telegram usa il prezzo del placement citato
+  per identificare il pending, e su un miss viene scartato con alert invece di
+  aprire alla cieca. Concausa risolta: un refuso col prezzo spaziato ("1. 20200")
+  veniva troncato a "1." dal parser.
+- Prezzi con spazi spuri interni ("1. 20200") normalizzati su TUTTI i tipi di
+  messaggio (placement, open, modify, close, cancel, move SL): un token di prezzo
+  condiviso tollera lo spazio e un helper unico lo ripulisce prima del lookup.
 - Refuso dell'asset nel canale (es. "GPS/USD" per GBP/USD) non fa più perdere il
   segnale: se il simbolo non è risolvibile, il lookup ripiega sul commento
   "@prezzo" cercandolo su tutte le posizioni e i pending del conto (col pip del
