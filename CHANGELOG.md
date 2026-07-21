@@ -39,6 +39,11 @@ giornaliero** (5% del deposito iniziale, con stop delle aperture all'80% del bud
   era stato piazzato); senza posizioni aperte si ricalcola pieno, anche al ribasso,
   per non restare sovraesposti con lotti troppo grandi dopo un calo del conto. Fuori
   da BALANCE, o senza deposito iniziale/account noti, il volume non cambia.
+- Riapertura della guardia in `MODE=BALANCE`: il volume della posizione riaperta è
+  ricalcolato sul balance attuale, ma **solo verso l'alto** (mai sotto il volume con
+  cui la posizione era stata aperta), perché la riapertura è la continuazione della
+  stessa esposizione. Fuori da BALANCE, o senza deposito iniziale/account noti, il
+  volume resta quello originale.
 - Soglia della guardia in percentuale del budget giornaliero: `CUT_LOSS` (importo
   fisso in valuta del conto) sostituita da `CUT_LOSS_PERCENT`, percentuale della
   perdita giornaliera consentita = `DAILY_LOSS_PERCENT` (nuova chiave `[risk]`) del

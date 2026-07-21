@@ -306,6 +306,27 @@ def test_cut_and_reopen_flow(monkeypatch):
     assert client.alerts == []
 
 
+@pytest.mark.parametrize("balance,expected_volume", [
+    # Conto cresciuto (200k, deposito 100k): disponibile 200k-90k=110k ->
+    # 110 scalini da 0.01 = 1.10 lotti -> riapre alla size BALANCE cresciuta
+    (200000.0, 1.10),
+    # Conto sceso (95k): disponibile 95k-90k=5k -> 5 scalini = 0.05, ma la
+    # riapertura della guardia non scende MAI sotto il volume originale (0.10)
+    (95000.0, 0.10),
+])
+def test_reopen_resizes_volume_up_only_on_balance(monkeypatch, balance, expected_volume):
+    class BalanceMT5(FakeMT5):
+        def account_info(self):
+            return SimpleNamespace(equity=balance, balance=balance)
+
+    fake = use(monkeypatch, BalanceMT5(
+        positions=[position(profit=-130.0, volume=0.10)],
+        deals=[deal(entry=ENTRY_IN), deal(profit=-130.0)]))
+    run(check_positions_once(FakeClient()))
+    # sent_requests[1] = riapertura: volume ricalcolato sul balance, solo su
+    assert fake.sent_requests[1]['volume'] == expected_volume
+
+
 def test_losses_accumulate_across_cuts(monkeypatch):
     fake = use(monkeypatch, FakeMT5(
         positions=[position(profit=-126.0, comment="@1.3390 (-120)")],

@@ -141,18 +141,29 @@ async def _cut_and_reopen(client, pos, parsed, cut_loss):
 	cumulative = prev_loss + loss_amount
 	comment = format_loss_comment(price_str, cumulative)
 
-	reopened = executor.open_market(pos.symbol, pos.type, pos.volume,
+	# Riapertura = continuazione della stessa esposizione: in MODE=BALANCE la
+	# size segue il balance cresciuto ma SOLO verso l'alto (has_open_positions
+	# forzato a True, mai al ribasso a caldo). Fuori da BALANCE, o senza
+	# deposito/account noti, resta pos.volume (noop). La posizione appena
+	# chiusa non è più su positions_get, quindi non si deduce il flag da lì.
+	# In BALANCE il sizing legge solo signal['asset'] (compute_lot -> _balance_lot):
+	# basta un dict con l'asset, senza gli altri campi di un segnale del canale.
+	volume = risk.resize_volume_to_balance(
+		{'asset': pos.symbol}, pos.volume, mt5.symbol_info(pos.symbol),
+		mt5.account_info(), has_open_positions=True)
+
+	reopened = executor.open_market(pos.symbol, pos.type, volume,
 	                                pos.sl, pos.tp, pos.magic, comment)
 	if reopened.ok:
 		logger.info(
-			f"Guardia: riaperta {pos.symbol} {pos.volume} lotti (ticket {reopened.ticket}), "
+			f"Guardia: riaperta {pos.symbol} {volume} lotti (ticket {reopened.ticket}), "
 			f"perdita realizzata {loss_amount}, commento '{comment}'."
 		)
 	else:
 		await _alert(client,
 		             f"POSIZIONE SCOPERTA: {pos.symbol} tagliata (ticket {pos.ticket}) ma "
 		             f"riapertura fallita: {reopened.message}. Riaprire a mano "
-		             f"{pos.volume} lotti {'BUY' if pos.type == 0 else 'SELL'} "
+		             f"{volume} lotti {'BUY' if pos.type == 0 else 'SELL'} "
 		             f"con SL {pos.sl} TP {pos.tp}, commento '{comment}'.")
 
 
