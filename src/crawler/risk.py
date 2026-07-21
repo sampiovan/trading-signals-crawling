@@ -100,21 +100,27 @@ def _balance_lot(signal, symbol_info, account_info, fixed_lot):
 	return normalized
 
 
-def grow_volume_to_balance(signal, current_volume, symbol_info, account_info):
+def resize_volume_to_balance(signal, current_volume, symbol_info, account_info, has_open_positions):
 	"""
-	Volume per un pending MODIFICATO. In MODE=BALANCE la size cresce fino a
-	quella che il balance attuale consentirebbe, ma MAI sotto il volume con
-	cui il pending era stato piazzato: se il conto è cresciuto (profitti
-	realizzati) la size si aggiorna, se è calato resta invariata. Negli altri
-	MODE, o quando manca un dato di balance da cui ricalcolare (deposito
-	iniziale o account non disponibili), il volume originale non viene
-	toccato: la crescita è ammessa solo se davvero guidata dal balance.
+	Volume per un pending MODIFICATO, in MODE=BALANCE, ricalcolato sul balance
+	attuale (`compute_lot`):
+	- con posizioni APERTE sull'asset (`has_open_positions`) la size può solo
+	  crescere (`max` col volume originale): con esposizione già aperta non la
+	  si riduce;
+	- senza posizioni aperte sull'asset si ricalcola pieno, anche al ribasso:
+	  evita di sovraesporsi tenendo lotti troppo grandi per un conto sceso.
+	Fuori da MODE=BALANCE, o senza un dato di balance da cui ricalcolare
+	(deposito iniziale o account non disponibili), il volume originale non
+	viene toccato.
 	"""
 	if _risk_setting('MODE', MODE_FIXED).upper() != MODE_BALANCE:
 		return current_volume
 	if _initial_deposit is None or account_info is None:
 		return current_volume
-	return max(current_volume, compute_lot(signal, symbol_info, account_info))
+	balance_size = compute_lot(signal, symbol_info, account_info)
+	if has_open_positions:
+		return max(current_volume, balance_size)
+	return balance_size
 
 
 def compute_lot(signal, symbol_info, account_info):

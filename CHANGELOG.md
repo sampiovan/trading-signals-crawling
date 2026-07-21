@@ -29,11 +29,11 @@ giornaliero** (5% del deposito iniziale, con stop delle aperture all'80% del bud
   non passa più inosservata nel solo log.
 
 ### Changed
-- Modifica di un pending in `MODE=BALANCE`: il ripiazzo aggiorna la size al valore
-  consentito dal balance attuale, ma solo verso l'alto. Se il conto è cresciuto dal
-  piazzamento la size sale (`max` tra il volume originale e quello del balance
-  attuale); se è calato restano i lotti originali. Fuori da BALANCE il volume non
-  cambia.
+- Modifica di un pending in `MODE=BALANCE`: il ripiazzo ricalcola la size sul balance
+  attuale. Con posizioni aperte sull'asset può solo salire (mai sotto i lotti con cui
+  era stato piazzato); senza posizioni aperte si ricalcola pieno, anche al ribasso,
+  per non restare sovraesposti con lotti troppo grandi dopo un calo del conto. Fuori
+  da BALANCE, o senza deposito iniziale/account noti, il volume non cambia.
 - Soglia della guardia in percentuale del budget giornaliero: `CUT_LOSS` (importo
   fisso in valuta del conto) sostituita da `CUT_LOSS_PERCENT` (default 2.5),
   percentuale della perdita giornaliera consentita = `DAILY_LOSS_PERCENT`
