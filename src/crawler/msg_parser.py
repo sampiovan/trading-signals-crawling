@@ -33,60 +33,76 @@ class OrderNotFoundException(Exception):
 # Compilate una volta a livello di modulo. Nelle regex con più gruppi
 # l'asset è sempre nel formato XXX/YYY e i prezzi sono decimali col punto.
 
+# Gruppo di cattura del prezzo, tollerante ai refusi del canale con spazi
+# spuri DENTRO il numero ("1. 20200", "1 .20200"): consente spazi/tab tra
+# le cifre ma MAI i newline (le regex usano DOTALL), ed è ancorato a una
+# cifra a inizio e fine, così non ingloba testo o prezzi adiacenti. Va poi
+# ripulito con _clean_price. Un solo gruppo: gli indici match.group() restano.
+_PRICE = r"(\d[\d.\t ]*\d|\d)"
+
 # Piazzamento/apertura: usate sia dai parser sia da _extract_order_ref
 # per risolvere i reply Telegram. In entrambe: group(2)=asset, group(3)=entry.
 _PLACEMENT_RE = re.compile(
-	r"(?i)^(?:\S+\s*)?(BUY LIMIT|SELL LIMIT|BUY STOP|SELL STOP|BUY|SELL)\s+([A-Z]{3}/[A-Z]{3}).*?Prezzo\s+([\d\.]+).*?(?:di\s+apertura).*?Stop Loss\s*[^\d]*([\d\.]+).*?Take Profit\s*[^\d]*([\d\.]+)",
+	rf"(?i)^(?:\S+\s*)?(BUY LIMIT|SELL LIMIT|BUY STOP|SELL STOP|BUY|SELL)\s+([A-Z]{{3}}/[A-Z]{{3}}).*?Prezzo\s+{_PRICE}.*?(?:di\s+apertura).*?Stop Loss\s*[^\d]*{_PRICE}.*?Take Profit\s*[^\d]*{_PRICE}",
 	re.DOTALL
 )
 _OPEN_RE = re.compile(
 	# Il canale alterna "Prezzo di ingresso" e "Livello di ingresso"
-	r"(?i)Ordine\s+(BUY|SELL)\s+([A-Z]{3}/[A-Z]{3}).*?Aperto.*?(?:Prezzo|Livello)\s+di\s+ingresso\s+([\d\.]+)",
+	rf"(?i)Ordine\s+(BUY|SELL)\s+([A-Z]{{3}}/[A-Z]{{3}}).*?Aperto.*?(?:Prezzo|Livello)\s+di\s+ingresso\s+{_PRICE}",
 	re.DOTALL
 )
 
 # Operazione diretta a mercato: trigger + blocco ordine
 _MARKET_TRIGGER_RE = re.compile(r"(?i)OPERAZIONE\s+IN\s+(?:BUY|SELL)\s+DIRETTA\s+A\s+MERCATO")
 _MARKET_ORDER_RE = re.compile(
-	r"(?i)(BUY|SELL)\s+([A-Z]{3}/[A-Z]{3})\s*.*?Prezzo\s+([\d\.]+).*?apertura.*?Stop Loss\s*[^\d]*([\d\.]+).*?Take Profit\s*[^\d]*([\d\.]+)",
+	rf"(?i)(BUY|SELL)\s+([A-Z]{{3}}/[A-Z]{{3}})\s*.*?Prezzo\s+{_PRICE}.*?apertura.*?Stop Loss\s*[^\d]*{_PRICE}.*?Take Profit\s*[^\d]*{_PRICE}",
 	re.DOTALL
 )
 
 # Modifica del prezzo d'ingresso di un pending
 _MODIFY_RE = re.compile(
-	r"(?i)\((BUY LIMIT|SELL LIMIT|BUY STOP|SELL STOP)\s+([A-Z]{3}/[A-Z]{3})\).*?MODIFICARE IL PREZZO DI INGRESSO DA\s+([\d\.]+)\s+A\s+([\d\.]+)",
+	rf"(?i)\((BUY LIMIT|SELL LIMIT|BUY STOP|SELL STOP)\s+([A-Z]{{3}}/[A-Z]{{3}})\).*?MODIFICARE IL PREZZO DI INGRESSO DA\s+{_PRICE}\s+A\s+{_PRICE}",
 	re.DOTALL
 )
 
 # Spostamento dello stop loss (due varianti)
 _MOVE_SL_ALL_RE = re.compile(
-	r"(?i)MODIFICARE\s+IL\s+VALORE\s+DI\s+STOP\s+LOSS\s+SU\s+TUTTE\s+LE\s+OPERAZIONI\s+IN\s+CORSO\s+SU\s+([A-Z]{3}/[A-Z]{3})\s+a\s+([\d\.]+)",
+	rf"(?i)MODIFICARE\s+IL\s+VALORE\s+DI\s+STOP\s+LOSS\s+SU\s+TUTTE\s+LE\s+OPERAZIONI\s+IN\s+CORSO\s+SU\s+([A-Z]{{3}}/[A-Z]{{3}})\s+a\s+{_PRICE}",
 	re.DOTALL
 )
 _MOVE_SL_BREAKEVEN_RE = re.compile(
-	r"(?i)([A-Z]{3}/[A-Z]{3})\s+Move\s+Stop\s+Loss\s+to\s+Breakeven.*?a\s+([\d\.]+)",
+	rf"(?i)([A-Z]{{3}}/[A-Z]{{3}})\s+Move\s+Stop\s+Loss\s+to\s+Breakeven.*?a\s+{_PRICE}",
 	re.DOTALL
 )
 
 # Chiusure: multipla (trigger + righe posizione), notifica automatica, singola
 _MULTI_CLOSE_TRIGGER_RE = re.compile(r"(?i)CHIUDERE\s+MANUALMENTE\s+\w+\s+POSIZIONI")
 _MULTI_CLOSE_POSITION_RE = re.compile(
-	r"(?i)UNA\s+IN\s+(?:PROFITTO|PERDITA|PARI)\s+su\s+([A-Z]{3}/[A-Z]{3})\s*\(([\d\.]+)"
+	rf"(?i)UNA\s+IN\s+(?:PROFITTO|PERDITA|PARI)\s+su\s+([A-Z]{{3}}/[A-Z]{{3}})\s*\({_PRICE}"
 )
 _CLOSE_NOTIFICATION_RE = re.compile(r"(?i)CHIUSA\s+A\s+BREAKEVEN|CHIUSURA\s+IN\s+STOP")
 _CLOSE_RE = re.compile(
-	r"(?i)[\s\S]*([A-Z]{3}/[A-Z]{3}).*?CHIUDERE.*?\(([\d\.]+)\)",
+	rf"(?i)[\s\S]*([A-Z]{{3}}/[A-Z]{{3}}).*?CHIUDERE.*?\({_PRICE}\)",
 	re.DOTALL
 )
 
 # Annullamento di un pending
 _CANCEL_RE = re.compile(
-	r"(?i)ANNULLARE\s+(BUY LIMIT|SELL LIMIT|BUY STOP|SELL STOP)\s+([A-Z]{3}/[A-Z]{3}).*?\(([\d\.]+)",
+	rf"(?i)ANNULLARE\s+(BUY LIMIT|SELL LIMIT|BUY STOP|SELL STOP)\s+([A-Z]{{3}}/[A-Z]{{3}}).*?\({_PRICE}",
 	re.DOTALL
 )
 
 
 # -------------------- Helper privati --------------------
+
+def _clean_price(raw):
+	"""
+	Ripulisce un prezzo catturato dal refuso dello spazio interno del canale
+	("1. 20200" -> "1.20200"): rimuove spazi e tab. Logica di pulizia in un
+	solo punto, richiamata da ogni parser dove estrae un prezzo (vedi _PRICE).
+	"""
+	return re.sub(r"[\t ]", "", raw) if raw else raw
+
 
 def _build_signal(message_type, asset, signal_type='', order_id='', magic_number='',
                   entry='', sl='', tp='', comment=''):
@@ -137,7 +153,7 @@ def _extract_order_ref(text):
 	"""
 	match = _PLACEMENT_RE.search(text) or _OPEN_RE.search(text) or _MARKET_ORDER_RE.search(text)
 	if match:
-		return match.group(2).upper().replace("/", ""), match.group(3)
+		return match.group(2).upper().replace("/", ""), _clean_price(match.group(3))
 	return None
 
 
@@ -169,7 +185,7 @@ def parse_message(message_text, reply_text=None):
 	parsers = [
 		parse_order_placement,
 		parse_market_order,
-		parse_order_open,
+		lambda text: parse_order_open(text, reply_text),
 		parse_order_modify,
 		parse_move_sl_all,
 		lambda text: parse_move_sl_breakeven(text, reply_text),
@@ -212,9 +228,9 @@ def parse_order_placement(text):
 			match.group(2).upper().replace("/", ""),
 			signal_type=match.group(1).upper(),
 			magic_number=generate_magic(),	# order_id non ancora noto: il segnale è identificato dal magic
-			entry=match.group(3),
-			sl=match.group(4),
-			tp=match.group(5)
+			entry=_clean_price(match.group(3)),
+			sl=_clean_price(match.group(4)),
+			tp=_clean_price(match.group(5))
 		)
 	return None
 
@@ -256,35 +272,39 @@ def parse_market_order(text):
 		match.group(2).upper().replace("/", ""),
 		signal_type=match.group(1).upper(),
 		magic_number=generate_magic(),
-		entry=match.group(3),
-		sl=match.group(4),
-		tp=match.group(5)
+		entry=_clean_price(match.group(3)),
+		sl=_clean_price(match.group(4)),
+		tp=_clean_price(match.group(5))
 	)
 
 
-def parse_order_open(text):
+def parse_order_open(text, reply_text=None):
 	"""
-	Riconosce un messaggio di apertura ordine.
+	Riconosce un messaggio di apertura ordine: la NOTIFICA che un pending
+	piazzato in precedenza è stato riempito (non un comando di apertura).
 	Esempio:
 		"Ordine Buy  EUR/USD    Aperto
 		Prezzo di ingresso  1.12500"
+
+	Arriva spesso come RISPOSTA Telegram al messaggio di piazzamento: se il
+	testo citato (reply_text) è parsabile e sullo stesso asset, il lookup usa
+	il suo prezzo (più affidabile di quello del messaggio, che il canale a
+	volte storpia), altrimenti il prezzo del messaggio stesso. Se il pending
+	non si trova si solleva OrderNotFoundException: mai aprire a mercato alla
+	cieca, sarebbe un duplicato dell'esposizione già pendente.
 	"""
 	match = _OPEN_RE.search(text)
 
 	if match:
-		# Estraggo i valori
 		signal_type = match.group(1).upper()
 		asset = match.group(2).upper().replace("/", "")
-		entry = match.group(3)
+		entry = _clean_price(match.group(3))
 
-		order_id, magic_number = get_order_ticket(asset, entry, signal_type)
-		if not order_id:
-			# Nessun placement precedente nel registro: è un ordine diretto
-			# a mercato. order_id vuoto segnala all'EA di aprire la posizione
-			# (e registrarne il ticket) invece di verificare un pending.
-			logger.info(f"Nessun pending nel registro per open {asset} @ {entry}: ordine diretto a mercato.")
-			order_id = ''
-			magic_number = generate_magic()
+		# Il reply al placement è la fonte più affidabile del prezzo d'ingresso
+		ref = _extract_order_ref(reply_text) if reply_text else None
+		lookup_entry = ref[1] if ref and ref[0] == asset else entry
+
+		order_id, magic_number = _find_order_or_raise(asset, lookup_entry, signal_type, 'open')
 		return _build_signal(
 			'open', asset,
 			signal_type=signal_type,
@@ -307,8 +327,8 @@ def parse_order_modify(text):
 		# Estraggo i valori
 		signal_type = match.group(1).upper()
 		asset = match.group(2).upper().replace("/", "")
-		old_price = match.group(3)
-		new_price = match.group(4)
+		old_price = _clean_price(match.group(3))
+		new_price = _clean_price(match.group(4))
 
 		# La lookup avviene sul VECCHIO prezzo d'entrata, il segnale porta il nuovo
 		order_id, magic_number = _find_order_or_raise(asset, old_price, signal_type, 'modify')
@@ -337,7 +357,7 @@ def parse_move_sl_all(text):
 
 	if match:
 		asset = match.group(1).upper().replace("/", "")
-		sl_value = match.group(2)
+		sl_value = _clean_price(match.group(2))
 		return _move_sl_signal(asset, sl_value)
 	return None
 
@@ -359,7 +379,7 @@ def parse_move_sl_breakeven(text, reply_text=None):
 		return None
 
 	asset = match.group(1).upper().replace("/", "")
-	sl_value = match.group(2)
+	sl_value = _clean_price(match.group(2))
 
 	# Prova a risalire all'ordine esatto tramite il messaggio citato
 	if reply_text:
@@ -409,7 +429,7 @@ def parse_orders_multi_close(text):
 	for raw_asset, entry_price in positions:
 		asset = raw_asset.upper().replace("/", "")
 		try:
-			signals.append(_close_signal(asset, entry_price))
+			signals.append(_close_signal(asset, _clean_price(entry_price)))
 		except OrderNotFoundException:
 			# Successo parziale: non scartare le altre posizioni del messaggio
 			logger.error(f"Multi-close: ordine non trovato nel registro per asset={asset}, entry={entry_price}. Posizione saltata.")
@@ -452,7 +472,7 @@ def parse_order_close(text):
 
 	if match:
 		asset = match.group(1).upper().replace("/", "")
-		entry_price = match.group(2)
+		entry_price = _clean_price(match.group(2))
 		return _close_signal(asset, entry_price)
 	return None
 
@@ -469,7 +489,7 @@ def parse_order_cancel(text):
 		# Estraggo i valori
 		signal_type = match.group(1).upper()
 		asset = match.group(2).upper().replace("/", "")
-		entry = match.group(3)
+		entry = _clean_price(match.group(3))
 
 		order_id, magic_number = _find_order_or_raise(asset, entry, signal_type, 'cancel')
 		return _build_signal(
