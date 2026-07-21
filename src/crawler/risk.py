@@ -20,8 +20,8 @@ MODE_FIXED = 'FIXED'
 MODE_RISK_PERCENT = 'RISK_PERCENT'
 MODE_BALANCE = 'BALANCE'
 
-# Deposito iniziale del conto, risolto all'avvio da main
-# (config INITIAL_DEPOSIT > stato persistito > balance al primo avvio)
+# Deposito iniziale del conto, impostato all'avvio da main dalla config
+# ([risk] INITIAL_DEPOSIT, obbligatorio)
 _initial_deposit = None
 
 
@@ -36,19 +36,20 @@ def set_initial_deposit(value):
 def daily_loss_budget():
 	"""
 	Perdita giornaliera consentita in valuta del conto: DAILY_LOSS_PERCENT
-	(config [risk], default 5) per cento del deposito iniziale, quindi
-	fissa anche quando il balance cresce. None se il deposito non è
+	(config [risk]) per cento del deposito iniziale, quindi fissa anche
+	quando il balance cresce. None se il deposito non è
 	utilizzabile (non ancora noto, oppure ≤ 0 per un refuso in config: una
 	soglia negativa invertirebbe i confronti di chi la usa).
 	"""
 	if _initial_deposit is None or _initial_deposit <= 0:
 		return None
-	percent = float(_risk_setting('DAILY_LOSS_PERCENT', '5') or 5)
+	percent = float(_risk_setting('DAILY_LOSS_PERCENT'))
 	return _initial_deposit * percent / 100
 
 
-def _risk_setting(key, default):
-	return get_setting(load_config(), 'risk', key, default=default)
+def _risk_setting(key):
+	"""Legge una chiave [risk] obbligatoria (garantita presente dalla validazione all'avvio)."""
+	return get_setting(load_config(), 'risk', key)
 
 
 def normalize_volume(lot, symbol_info):
@@ -78,9 +79,9 @@ def _balance_lot(signal, symbol_info, account_info, fixed_lot):
 		logger.warning("MODE=BALANCE senza balance o deposito iniziale: fallback sul lotto fisso.")
 		return normalize_volume(fixed_lot, symbol_info)
 
-	available_percent = float(_risk_setting('AVAILABLE_PERCENT', '10') or 10)
-	step_balance = float(_risk_setting('BALANCE_STEP', '1000') or 1000)
-	lot_per_step = float(_risk_setting('LOT_PER_STEP', '0.01') or 0.01)
+	available_percent = float(_risk_setting('AVAILABLE_PERCENT'))
+	step_balance = float(_risk_setting('BALANCE_STEP'))
+	lot_per_step = float(_risk_setting('LOT_PER_STEP'))
 
 	floor_capital = _initial_deposit * (1 - available_percent / 100.0)
 	available = max(0.0, account_info.balance - floor_capital)
@@ -113,7 +114,7 @@ def resize_volume_to_balance(signal, current_volume, symbol_info, account_info, 
 	(deposito iniziale o account non disponibili), il volume originale non
 	viene toccato.
 	"""
-	if _risk_setting('MODE', MODE_FIXED).upper() != MODE_BALANCE:
+	if _risk_setting('MODE').upper() != MODE_BALANCE:
 		return current_volume
 	if _initial_deposit is None or account_info is None:
 		return current_volume
@@ -133,8 +134,8 @@ def compute_lot(signal, symbol_info, account_info):
 	ha SL o entry validi (o mancano i dati del conto) si ricade sul lotto
 	fisso, con warning.
 	"""
-	fixed_lot = float(_risk_setting('FIXED_LOT', '0.01') or 0.01)
-	mode = _risk_setting('MODE', MODE_FIXED).upper() or MODE_FIXED
+	fixed_lot = float(_risk_setting('FIXED_LOT'))
+	mode = _risk_setting('MODE').upper()
 
 	if mode == MODE_BALANCE:
 		return _balance_lot(signal, symbol_info, account_info, fixed_lot)
@@ -158,7 +159,7 @@ def compute_lot(signal, symbol_info, account_info):
 		)
 		return normalize_volume(fixed_lot, symbol_info)
 
-	risk_percent = float(_risk_setting('RISK_PERCENT', '1.0') or 1.0)
+	risk_percent = float(_risk_setting('RISK_PERCENT'))
 	risk_amount = account_info.equity * risk_percent / 100.0
 
 	ticks = abs(entry - sl) / symbol_info.trade_tick_size

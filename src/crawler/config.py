@@ -8,6 +8,10 @@ _config = None
 # errore chiaro invece di un KeyError al primo accesso.
 REQUIRED_KEYS = {
 	'telegram': ['YOUR_API_ID', 'YOUR_API_HASH', 'SESSION_NAME', 'CHANNEL_ENTITY'],
+	'risk': ['MODE', 'FIXED_LOT', 'RISK_PERCENT', 'INITIAL_DEPOSIT',
+	         'DAILY_LOSS_PERCENT', 'AVAILABLE_PERCENT', 'BALANCE_STEP', 'LOT_PER_STEP'],
+	'guard': ['ENABLED', 'CUT_LOSS_PERCENT', 'INTERVAL_SECONDS', 'MIN_AGE_SECONDS',
+	          'SPREAD_FACTOR', 'NEWS_BLACKOUT', 'NEWS_BLACKOUT_MINUTES'],
 }
 
 

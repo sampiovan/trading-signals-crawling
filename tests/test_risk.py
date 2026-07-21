@@ -54,12 +54,6 @@ def test_fixed_mode_returns_fixed_lot(monkeypatch):
     assert compute_lot(make_signal(), EURUSD, ACCOUNT) == 0.05
 
 
-def test_missing_config_defaults_to_fixed(monkeypatch):
-    monkeypatch.setattr(risk, 'load_config', lambda: None)
-    monkeypatch.setattr(risk, 'get_setting', lambda cfg, s, k, default='': default)
-    assert compute_lot(make_signal(), EURUSD, ACCOUNT) == 0.01
-
-
 def test_unknown_mode_falls_back_to_fixed(monkeypatch):
     set_risk_config(monkeypatch, mode='YOLO', fixed_lot='0.02')
     assert compute_lot(make_signal(), EURUSD, ACCOUNT) == 0.02

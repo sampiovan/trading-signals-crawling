@@ -83,11 +83,24 @@ class FakeClient:
         self.alerts.append((target, text))
 
 
+# Tutte le chiavi [guard]/[risk] valorizzate (ora sono obbligatorie: niente
+# più default inline nel codice). Soglia di taglio = 2.5% del budget 5% su 100k = 125.
+SETTINGS = {
+    # [guard]
+    'ENABLED': 'true', 'CUT_LOSS_PERCENT': '2.5', 'INTERVAL_SECONDS': '15',
+    'MIN_AGE_SECONDS': '300', 'SPREAD_FACTOR': '2',
+    'NEWS_BLACKOUT': 'true', 'NEWS_BLACKOUT_MINUTES': '30',
+    # [risk]
+    'MODE': 'BALANCE', 'FIXED_LOT': '0.01', 'RISK_PERCENT': '1.0',
+    'DAILY_LOSS_PERCENT': '5', 'AVAILABLE_PERCENT': '10',
+    'BALANCE_STEP': '1000', 'LOT_PER_STEP': '0.01',
+}
+
+
 @pytest.fixture(autouse=True)
 def wire_stub(monkeypatch):
     """Config con soglia 125 (2.5% del budget 5% su 100k), stub condiviso guardia+executor."""
-    values = {'CUT_LOSS_PERCENT': '2.5', 'DAILY_LOSS_PERCENT': '5',
-              'INTERVAL_SECONDS': '15', 'ENABLED': 'true'}
+    values = dict(SETTINGS)
     monkeypatch.setattr(risk, '_initial_deposit', 100000.0)
     monkeypatch.setattr(position_guard, 'load_config', lambda: None)
     monkeypatch.setattr(position_guard, 'get_setting',
@@ -225,7 +238,7 @@ def test_news_blackout_suspends_guard_on_all_assets(monkeypatch):
 
 
 def test_news_blackout_disabled_cuts(monkeypatch):
-    values = {'NEWS_BLACKOUT': 'false'}
+    values = dict(SETTINGS, NEWS_BLACKOUT='false')
     monkeypatch.setattr(position_guard, 'get_setting',
                         lambda cfg, section, key, default='': values.get(key, default))
     monkeypatch.setattr(news_calendar, '_events', [_high_impact_event_now("USD")])
@@ -359,7 +372,7 @@ def test_failed_reopen_alerts_uncovered_position(monkeypatch):
 
 
 def test_run_guard_disabled_exits_immediately(monkeypatch):
-    values = {'ENABLED': 'false'}
+    values = dict(SETTINGS, ENABLED='false')
     monkeypatch.setattr(position_guard, 'get_setting',
                         lambda cfg, section, key, default='': values.get(key, default))
     # Se non uscisse subito, asyncio.run non terminerebbe (loop infinito)
