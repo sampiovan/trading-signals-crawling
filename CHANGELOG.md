@@ -10,23 +10,7 @@ Il formato segue [Keep a Changelog](https://keepachangelog.com/it-IT/1.1.0/) e i
 In roadmap: **multi-canale** (impostazioni e rischio per canale) e **budget di perdita
 giornaliero** (5% del deposito iniziale, con stop delle aperture all'80% del budget).
 
-### Fixed
-- Messaggio "Aperto" non duplica più la posizione: era la notifica di riempimento
-  di un pending ma, se il lookup non lo trovava, apriva un ordine a mercato nuovo.
-  Ora un "Aperto" arrivato come risposta Telegram usa il prezzo del placement citato
-  per identificare il pending, e su un miss viene scartato con alert invece di
-  aprire alla cieca. Concausa risolta: un refuso col prezzo spaziato ("1. 20200")
-  veniva troncato a "1." dal parser.
-- Prezzi con spazi spuri interni ("1. 20200") normalizzati su TUTTI i tipi di
-  messaggio (placement, open, modify, close, cancel, move SL): un token di prezzo
-  condiviso tollera lo spazio e un helper unico lo ripulisce prima del lookup.
-- Refuso dell'asset nel canale (es. "GPS/USD" per GBP/USD) non fa più perdere il
-  segnale: se il simbolo non è risolvibile, il lookup ripiega sul commento
-  "@prezzo" cercandolo su tutte le posizioni e i pending del conto (col pip del
-  simbolo reale di ogni candidato) e procede solo con un match univoco.
-- Lo scarto di un segnale per ordine non trovato ora arriva anche nei Saved
-  Messages di Telegram, come i fallimenti di esecuzione: una chiusura persa
-  non passa più inosservata nel solo log.
+## [2.3.0] - 2026-07-22
 
 ### Changed
 - Tutte le costanti di `[risk]` e `[guard]` sono ora **obbligatorie** in `config.ini`:
@@ -57,6 +41,22 @@ giornaliero** (5% del deposito iniziale, con stop delle aperture all'80% del bud
   e a 60s le riaperture si susseguivano troppo in fretta).
 
 ### Fixed
+- Messaggio "Aperto" non duplica più la posizione: era la notifica di riempimento
+  di un pending ma, se il lookup non lo trovava, apriva un ordine a mercato nuovo.
+  Ora un "Aperto" arrivato come risposta Telegram usa il prezzo del placement citato
+  per identificare il pending, e su un miss viene scartato con alert invece di
+  aprire alla cieca. Concausa risolta: un refuso col prezzo spaziato ("1. 20200")
+  veniva troncato a "1." dal parser.
+- Prezzi con spazi spuri interni ("1. 20200") normalizzati su TUTTI i tipi di
+  messaggio (placement, open, modify, close, cancel, move SL): un token di prezzo
+  condiviso tollera lo spazio e un helper unico lo ripulisce prima del lookup.
+- Refuso dell'asset nel canale (es. "GPS/USD" per GBP/USD) non fa più perdere il
+  segnale: se il simbolo non è risolvibile, il lookup ripiega sul commento
+  "@prezzo" cercandolo su tutte le posizioni e i pending del conto (col pip del
+  simbolo reale di ogni candidato) e procede solo con un match univoco.
+- Lo scarto di un segnale per ordine non trovato ora arriva anche nei Saved
+  Messages di Telegram, come i fallimenti di esecuzione: una chiusura persa
+  non passa più inosservata nel solo log.
 - Scrittura atomica di `crawler_state.json` (file temporaneo + rename): un crash a
   metà scrittura corrompeva lo stato e al riavvio il catch-up ripartiva "da primo
   avvio", saltando in silenzio i segnali persi durante il downtime.
@@ -165,7 +165,8 @@ comunicanti via CSV. Congelata nel tag `v1.0.0`; eventuali hotfix sul branch `re
 - Ordini a mercato inviati con prezzo 0 (rifiutati dal broker).
 - Matching nel registro con tolleranza fissa inadatta alle coppie JPY.
 
-[Unreleased]: https://github.com/sampiovan/trading-signals-crawling/compare/v2.2.0...HEAD
+[Unreleased]: https://github.com/sampiovan/trading-signals-crawling/compare/v2.3.0...HEAD
+[2.3.0]: https://github.com/sampiovan/trading-signals-crawling/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/sampiovan/trading-signals-crawling/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/sampiovan/trading-signals-crawling/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/sampiovan/trading-signals-crawling/compare/v1.0.0...v2.0.0
