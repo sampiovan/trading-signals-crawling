@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 from crawler import risk
-from crawler.risk import compute_lot, normalize_volume
+from crawler.risk import compute_lot, resize_volume_to_balance, normalize_volume
 
 
 # EURUSD a 5 cifre: tick 0.00001 vale 1$ per lotto standard
@@ -52,12 +52,6 @@ def test_normalize_respects_bigger_step():
 def test_fixed_mode_returns_fixed_lot(monkeypatch):
     set_risk_config(monkeypatch, mode='FIXED', fixed_lot='0.05')
     assert compute_lot(make_signal(), EURUSD, ACCOUNT) == 0.05
-
-
-def test_missing_config_defaults_to_fixed(monkeypatch):
-    monkeypatch.setattr(risk, 'load_config', lambda: None)
-    monkeypatch.setattr(risk, 'get_setting', lambda cfg, s, k, default='': default)
-    assert compute_lot(make_signal(), EURUSD, ACCOUNT) == 0.01
 
 
 def test_unknown_mode_falls_back_to_fixed(monkeypatch):
@@ -175,3 +169,50 @@ def test_balance_custom_step_and_lot(monkeypatch):
         assert compute_lot(make_signal(), EURUSD, account_with(100000.0)) == 0.10
     finally:
         risk.set_initial_deposit(None)
+
+
+# ----- resize_volume_to_balance (modifica pending: ricalcolo condizionato) -----
+
+def test_resize_grows_when_account_grew(balance_mode):
+    # Pending piazzato a 0.01 quando il conto era basso; ora balance 99k dà 0.09:
+    # con posizioni aperte sull'asset la size può solo crescere -> 0.09
+    assert resize_volume_to_balance(make_signal(), 0.01, EURUSD, account_with(99000.0), True) == 0.09
+
+
+def test_resize_keeps_original_when_shrank_with_open_positions(balance_mode):
+    # Scenario ATTENZIONE: piazzato 0.10, ora balance 98k darebbe 0.08, ma ci
+    # sono posizioni aperte sull'asset -> mai al ribasso, resta 0.10
+    assert resize_volume_to_balance(make_signal(), 0.10, EURUSD, account_with(98000.0), True) == 0.10
+
+
+def test_resize_shrinks_when_shrank_and_no_open_positions(balance_mode):
+    # Nessuna posizione aperta sull'asset: si evita la sovraesposizione
+    # ricalcolando pieno, anche al ribasso -> 98k dà 0.08
+    assert resize_volume_to_balance(make_signal(), 0.10, EURUSD, account_with(98000.0), False) == 0.08
+
+
+def test_resize_recomputes_up_when_no_open_positions(balance_mode):
+    # Senza posizioni aperte il ricalcolo pieno vale anche verso l'alto
+    assert resize_volume_to_balance(make_signal(), 0.01, EURUSD, account_with(99000.0), False) == 0.09
+
+
+def test_resize_noop_outside_balance_mode(monkeypatch):
+    # In FIXED/RISK_PERCENT la size del pending non viene mai ricalcolata
+    set_risk_config(monkeypatch, mode='FIXED')
+    assert resize_volume_to_balance(make_signal(), 0.03, EURUSD, account_with(500000.0), False) == 0.03
+
+
+def test_resize_keeps_original_without_initial_deposit(monkeypatch):
+    # Deposito non noto: senza un dato di balance da cui ricalcolare, il volume
+    # non viene toccato (né su né giù), nemmeno verso il lotto fisso più grande
+    keys = dict(BALANCE_KEYS, FIXED_LOT='0.50')
+    monkeypatch.setattr(risk, 'load_config', lambda: None)
+    monkeypatch.setattr(risk, 'get_setting',
+                        lambda cfg, section, key, default='': keys.get(key, default))
+    risk.set_initial_deposit(None)
+    assert resize_volume_to_balance(make_signal(), 0.01, EURUSD, account_with(100000.0), False) == 0.01
+
+
+def test_resize_keeps_original_without_account_info(balance_mode):
+    # Senza account_info non c'è balance da cui ricalcolare: si tiene l'originale
+    assert resize_volume_to_balance(make_signal(), 0.03, EURUSD, None, False) == 0.03

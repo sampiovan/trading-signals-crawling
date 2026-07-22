@@ -37,7 +37,7 @@ Il parser ([msg_parser.py](src/crawler/msg_parser.py)) riconosce questi tipi di 
 | `placement` | Piazzamento di un ordine pendente | `📈BUY LIMIT EUR/USD  Prezzo 1.12500 (di apertura) …` |
 | `placement` (a mercato) | Operazione diretta a mercato, eseguita subito al prezzo corrente (Ask/Bid) | `ATTENZIONE QUESTA E' UNA OPERAZIONE IN SELL DIRETTA A MERCATO: … SELL GBP/USD Prezzo 1.34121 …` |
 | `open` | Notifica che un pending è stato riempito: si verifica soltanto che il pending sia diventato posizione, mai un'apertura a mercato (sarebbe un duplicato). Arriva spesso come **risposta Telegram** al placement, il cui prezzo identifica l'ordine anche se quello del messaggio è storpiato; se il pending non si trova, il segnale è scartato con alert | `Ordine Buy EUR/USD Aperto  Prezzo di ingresso 1.12500` |
-| `modify` | Modifica del prezzo di ingresso di un pending (o del solo SL se mirata via reply) | `(BUY LIMIT EUR/USD) - MODIFICARE IL PREZZO DI INGRESSO DA … A …` |
+| `modify` | Modifica del prezzo di ingresso di un pending (o del solo SL se mirata via reply). In `MODE=BALANCE` il ripiazzo ricalcola anche la size sul balance attuale: se ci sono posizioni aperte sull'asset può solo salire (mai sotto i lotti piazzati), altrimenti si ricalcola pieno anche al ribasso (evita di sovraesporsi con lotti troppo grandi per un conto sceso) | `(BUY LIMIT EUR/USD) - MODIFICARE IL PREZZO DI INGRESSO DA … A …` |
 | `move_sl` | Spostamento dello stop loss: "Move Stop Loss to Breakeven…" (se arriva come **risposta Telegram** al messaggio di apertura diventa una modifica mirata al singolo ticket) oppure "MODIFICARE IL VALORE DI STOP LOSS SU TUTTE LE OPERAZIONI IN CORSO SU …". Senza ticket, il nuovo SL è applicato a **tutte** le posizioni sull'asset | `GBP/USD Move Stop Loss to Breakeven … a 1.33890✅` |
 | `close` | Chiusura manuale di una posizione | `CHIUDERE MANUALMENTE UNA POSIZIONE … (1.12500)` |
 | `close` (multiplo) | Chiusura di più posizioni (anche su asset diversi): un ordine di chiusura per ognuna; quelle non trovate vengono saltate con errore nel log senza bloccare le altre | `CHIUDERE MANUALMENTE QUATTRO POSIZIONI DI CUI: …` |
@@ -100,13 +100,14 @@ SYMBOL_SUFFIX =
 ; slippage massimo in punti (30 = 3 pip a 5 cifre)
 DEVIATION_POINTS = 30
 
+; tutte le chiavi di [risk] e [guard] sono OBBLIGATORIE (nessun default nel codice)
 [risk]
 ; FIXED = lotto fisso | RISK_PERCENT = rischio % per trade | BALANCE = scalini sul balance
 MODE = BALANCE
 FIXED_LOT = 0.01
 RISK_PERCENT = 1.0
-; deposito iniziale: vuoto = rilevato dal balance al primo avvio e persistito
-INITIAL_DEPOSIT =
+; deposito iniziale (base del sizing BALANCE e della soglia della guardia)
+INITIAL_DEPOSIT = 100000
 ; perdita giornaliera consentita in % del deposito iniziale
 DAILY_LOSS_PERCENT = 5
 AVAILABLE_PERCENT = 10
@@ -131,7 +132,7 @@ NEWS_BLACKOUT_MINUTES = 30
 
 Il volume di ogni ordine è calcolato da [risk.py](src/crawler/risk.py):
 
-- **`MODE = BALANCE`**: `LOT_PER_STEP` lotti (default 0.01) ogni `BALANCE_STEP` (default 1000, valuta del conto) di capitale **disponibile**, dove disponibile = balance − (100 − `AVAILABLE_PERCENT`)% del deposito iniziale. Con deposito 100k e il 10% disponibile: a balance 100k → 0.10 lotti; i lotti seguono solo i profitti/perdite **realizzati** (balance, niente flottante). Il deposito iniziale viene da `INITIAL_DEPOSIT` in config oppure, se vuoto, è rilevato dal balance al primo avvio e persistito in `crawler_state.json`.
+- **`MODE = BALANCE`**: `LOT_PER_STEP` lotti ogni `BALANCE_STEP` (valuta del conto) di capitale **disponibile**, dove disponibile = balance − (100 − `AVAILABLE_PERCENT`)% del deposito iniziale. Con deposito 100k e il 10% disponibile: a balance 100k → 0.10 lotti; i lotti seguono solo i profitti/perdite **realizzati** (balance, niente flottante). Il deposito iniziale è preso da `INITIAL_DEPOSIT` in config.
 - **`MODE = FIXED`**: lotto fisso `FIXED_LOT`, come nella v1.
 - **`MODE = RISK_PERCENT`**: rischia al massimo `RISK_PERCENT`% dell'equity per trade — il lotto è calcolato dalla distanza dello Stop Loss e dal valore del tick del simbolo (`rischio / perdita-per-lotto-se-SL-colpito`). Se il segnale non ha SL, fallback su `FIXED_LOT` con warning nel log.
 
@@ -139,9 +140,9 @@ In tutti i casi il volume è normalizzato sui limiti del simbolo (min/max/step d
 
 ### Guardia delle posizioni in perdita
 
-Un controllo periodico ([position_guard.py](src/crawler/position_guard.py), ogni `INTERVAL_SECONDS`) sorveglia le posizioni aperte dal crawler (riconosciute dal commento `@prezzo`): quando la **perdita di prezzo** di una posizione (esclusi swap e commissioni) supera la soglia di taglio, la posizione viene **chiusa e riaperta immediatamente** a mercato con stessi direzione, volume, SL, TP e magic number. Il commento della nuova posizione conserva il prezzo originale del canale e accumula la perdita realizzata — inclusi swap e commissioni, arrotondata agli interi: `@1.3390 (-120)`, poi `@1.3390 (-245)` a un secondo taglio. I segnali successivi del canale (chiusura, move SL) ritrovano la posizione riaperta proprio grazie al commento. La guardia **adotta** anche le posizioni legacy del vecchio executor (commento `placement`/`open`) e quelle senza commento (es. aperte a mano): al primo taglio il loro prezzo di apertura reale diventa il prezzo del commento e la riaperta nasce già nel formato `@prezzo (-N)`. Le posizioni con commenti di altri sistemi non vengono mai toccate. Se la riapertura fallisce, arriva un alert nei Saved Messages con i dati per riaprire a mano.
+Un controllo periodico ([position_guard.py](src/crawler/position_guard.py), ogni `INTERVAL_SECONDS`) sorveglia le posizioni aperte dal crawler (riconosciute dal commento `@prezzo`): quando la **perdita di prezzo** di una posizione (esclusi swap e commissioni) supera la soglia di taglio, la posizione viene **chiusa e riaperta immediatamente** a mercato con stessi direzione, SL, TP e magic number. In `MODE=BALANCE` il volume di riapertura è **ricalcolato sul balance attuale ma può solo salire** rispetto a quello con cui la posizione era stata aperta — la stessa esposizione non si riduce a caldo, ma segue verso l'alto la crescita del conto; fuori da BALANCE (o senza deposito iniziale/account noti) resta identico all'originale. Il commento della nuova posizione conserva il prezzo originale del canale e accumula la perdita realizzata — inclusi swap e commissioni, arrotondata agli interi: `@1.3390 (-120)`, poi `@1.3390 (-245)` a un secondo taglio. I segnali successivi del canale (chiusura, move SL) ritrovano la posizione riaperta proprio grazie al commento. La guardia **adotta** anche le posizioni legacy del vecchio executor (commento `placement`/`open`) e quelle senza commento (es. aperte a mano): al primo taglio il loro prezzo di apertura reale diventa il prezzo del commento e la riaperta nasce già nel formato `@prezzo (-N)`. Le posizioni con commenti di altri sistemi non vengono mai toccate. Se la riapertura fallisce, arriva un alert nei Saved Messages con i dati per riaprire a mano.
 
-La soglia di taglio è `CUT_LOSS_PERCENT` (default 2.5) **per cento della perdita giornaliera consentita**, cioè `DAILY_LOSS_PERCENT` (`[risk]`, default 5) per cento del deposito iniziale: con deposito 100k e limite 5% il budget giornaliero è 5000 e il taglio scatta a −125. Il default riflette il limite di perdita giornaliera tipico dei conti di prop firm; su un conto senza vincoli va impostato alla propria tolleranza. Poiché il budget è calcolato sul deposito iniziale, la soglia resta **fissa in valuta** anche quando il balance (e quindi i lotti del sizing BALANCE) cresce: ogni taglio consuma una frazione nota e costante del budget giornaliero.
+La soglia di taglio è `CUT_LOSS_PERCENT` **per cento della perdita giornaliera consentita**, cioè `DAILY_LOSS_PERCENT` (`[risk]`) per cento del deposito iniziale: con deposito 100k, `DAILY_LOSS_PERCENT = 5` e `CUT_LOSS_PERCENT = 2.5` il budget giornaliero è 5000 e il taglio scatta a −125. `DAILY_LOSS_PERCENT` riflette il limite di perdita giornaliera tipico dei conti di prop firm; su un conto senza vincoli va impostato alla propria tolleranza. Poiché il budget è calcolato sul deposito iniziale, la soglia resta **fissa in valuta** anche quando il balance (e quindi i lotti del sizing BALANCE) cresce: ogni taglio consuma una frazione nota e costante del budget giornaliero.
 
 Due protezioni **anti-churn** evitano il ciclo di tagli/riaperture nei momenti di spread largo (una posizione appena aperta parte già in perdita dello spread, e ogni riapertura lo ripaga): le posizioni più giovani di `MIN_AGE_SECONDS` non vengono toccate — e poiché ogni riaperta è una posizione nuova, l'età minima fa anche da pausa tra un taglio e l'altro — e il taglio è rinviato (con warning nel log) finché la soglia di taglio non supera `SPREAD_FACTOR` volte il costo corrente dello spread per il volume della posizione. L'età è misurata in tempo server del broker, non con l'orologio locale; ogni protezione si disattiva col valore `0`.
 

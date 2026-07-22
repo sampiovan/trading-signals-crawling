@@ -14,6 +14,25 @@ CHANNEL_ENTITY = @canale
 [mt5]
 TERMINAL_PATH =
 SYMBOL_SUFFIX = .m
+
+[risk]
+MODE = BALANCE
+FIXED_LOT = 0.01
+RISK_PERCENT = 1.0
+INITIAL_DEPOSIT = 100000
+DAILY_LOSS_PERCENT = 5
+AVAILABLE_PERCENT = 10
+BALANCE_STEP = 1000
+LOT_PER_STEP = 0.01
+
+[guard]
+ENABLED = true
+CUT_LOSS_PERCENT = 2.5
+INTERVAL_SECONDS = 60
+MIN_AGE_SECONDS = 300
+SPREAD_FACTOR = 2
+NEWS_BLACKOUT = true
+NEWS_BLACKOUT_MINUTES = 30
 """
 
 
@@ -65,10 +84,22 @@ def test_missing_section_lists_all_keys(tmp_path):
 
 def test_mt5_settings_are_optional(tmp_path):
     # La sezione [mt5] può mancare del tutto (config in stile v1): default vuoti
-    only_telegram = VALID_CONFIG.split("[mt5]")[0]
-    cfg = load_config(_write(tmp_path, only_telegram))
+    no_mt5 = VALID_CONFIG.replace("[mt5]\nTERMINAL_PATH =\nSYMBOL_SUFFIX = .m\n\n", "")
+    cfg = load_config(_write(tmp_path, no_mt5))
     assert get_mt5_setting(cfg, 'TERMINAL_PATH') == ''
     assert get_mt5_setting(cfg, 'SYMBOL_SUFFIX', default='') == ''
+
+
+def test_missing_risk_key_raises(tmp_path):
+    broken = VALID_CONFIG.replace("LOT_PER_STEP = 0.01\n", "")
+    with pytest.raises(ValueError, match=r"\[risk\] LOT_PER_STEP"):
+        load_config(_write(tmp_path, broken))
+
+
+def test_missing_guard_key_raises(tmp_path):
+    broken = VALID_CONFIG.replace("SPREAD_FACTOR = 2\n", "")
+    with pytest.raises(ValueError, match=r"\[guard\] SPREAD_FACTOR"):
+        load_config(_write(tmp_path, broken))
 
 
 def test_mt5_settings_read_when_present(tmp_path):

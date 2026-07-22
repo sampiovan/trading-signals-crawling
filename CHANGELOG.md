@@ -29,20 +29,32 @@ giornaliero** (5% del deposito iniziale, con stop delle aperture all'80% del bud
   non passa più inosservata nel solo log.
 
 ### Changed
+- Tutte le costanti di `[risk]` e `[guard]` sono ora **obbligatorie** in `config.ini`:
+  il codice non applica più default impliciti e il crawler rifiuta di partire (con
+  l'elenco delle chiavi mancanti o vuote) se una manca. `INITIAL_DEPOSIT` diventa
+  anch'esso obbligatorio: rimosso l'auto-rilevamento dal balance al primo avvio e la
+  sua persistenza in `crawler_state.json`.
+- Modifica di un pending in `MODE=BALANCE`: il ripiazzo ricalcola la size sul balance
+  attuale. Con posizioni aperte sull'asset può solo salire (mai sotto i lotti con cui
+  era stato piazzato); senza posizioni aperte si ricalcola pieno, anche al ribasso,
+  per non restare sovraesposti con lotti troppo grandi dopo un calo del conto. Fuori
+  da BALANCE, o senza deposito iniziale/account noti, il volume non cambia.
+- Riapertura della guardia in `MODE=BALANCE`: il volume della posizione riaperta è
+  ricalcolato sul balance attuale, ma **solo verso l'alto** (mai sotto il volume con
+  cui la posizione era stata aperta), perché la riapertura è la continuazione della
+  stessa esposizione. Fuori da BALANCE, o senza deposito iniziale/account noti, il
+  volume resta quello originale.
 - Soglia della guardia in percentuale del budget giornaliero: `CUT_LOSS` (importo
-  fisso in valuta del conto) sostituita da `CUT_LOSS_PERCENT` (default 2.5),
-  percentuale della perdita giornaliera consentita = `DAILY_LOSS_PERCENT`
-  (nuova chiave `[risk]`, default 5) del deposito iniziale.
-  Il budget è calcolato sul deposito iniziale, quindi ogni taglio consuma una
-  frazione nota e costante del budget anche quando il balance (e i lotti del
-  sizing BALANCE) cresce. Migrazione: il vecchio `CUT_LOSS = 125` equivale a
-  `CUT_LOSS_PERCENT = 2.5` con deposito 100k e limite giornaliero del 5%.
-- Default della guardia più conservativi, allineati ai valori in uso:
-  `INTERVAL_SECONDS` da 15 a 60 (un check al minuto basta: il taglio non è
-  un'operazione da tempo di reazione) e `MIN_AGE_SECONDS` da 60 a 300 (l'età
-  minima fa anche da pausa tra un taglio e l'altro, e a 60s le riaperture si
-  susseguivano troppo in fretta). Chi li aveva già espliciti in config non è
-  toccato.
+  fisso in valuta del conto) sostituita da `CUT_LOSS_PERCENT`, percentuale della
+  perdita giornaliera consentita = `DAILY_LOSS_PERCENT` (nuova chiave `[risk]`) del
+  deposito iniziale. Il budget è calcolato sul deposito iniziale, quindi ogni taglio
+  consuma una frazione nota e costante del budget anche quando il balance (e i lotti
+  del sizing BALANCE) cresce. Migrazione: il vecchio `CUT_LOSS = 125` equivale a
+  `CUT_LOSS_PERCENT = 2.5` con deposito 100k e `DAILY_LOSS_PERCENT = 5`.
+- Valori della guardia in `config.example.ini` più conservativi: `INTERVAL_SECONDS`
+  a 60 (un check al minuto basta: il taglio non è un'operazione da tempo di reazione)
+  e `MIN_AGE_SECONDS` a 300 (l'età minima fa anche da pausa tra un taglio e l'altro,
+  e a 60s le riaperture si susseguivano troppo in fretta).
 
 ### Fixed
 - Scrittura atomica di `crawler_state.json` (file temporaneo + rename): un crash a

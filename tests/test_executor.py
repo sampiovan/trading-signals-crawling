@@ -86,6 +86,9 @@ def wire_stub(monkeypatch):
     monkeypatch.setattr(executor, 'get_mt5_setting',
                         lambda cfg, key, default='': default)
     monkeypatch.setattr(executor, 'compute_lot', lambda signal, si, ai: 0.01)
+    # Default: la modifica di un pending mantiene il volume originale
+    monkeypatch.setattr(executor, 'resize_volume_to_balance',
+                        lambda signal, vol, si, ai, has_open: vol)
     monkeypatch.setattr(executor.time, 'sleep', lambda s: None)
     monkeypatch.setattr(mt5_client, 'resolve_symbol', lambda asset: asset)
 
@@ -188,6 +191,46 @@ def test_modify_pending_removes_and_replaces_with_new_comment(monkeypatch):
     assert place_req['sl'] == 1.05 and place_req['tp'] == 1.30  # 0 = invariato
     assert place_req['volume'] == 0.05 and place_req['magic'] == 54321  # ereditati dal pending
     assert place_req['comment'] == '@1.1300'  # commento aggiornato al nuovo prezzo
+
+
+def test_modify_pending_resizes_volume_via_helper(monkeypatch):
+    # Il volume del pending ripiazzato viene dal ricalcolo (resize_volume_to_balance),
+    # non copiato dall'originale; il resto (prezzo, commento) resta invariato
+    monkeypatch.setattr(executor, 'resize_volume_to_balance',
+                        lambda signal, vol, si, ai, has_open: 0.09)
+    fake = use(monkeypatch, FakeMT5(send_results=[result(RETCODE_DONE), result(RETCODE_DONE, order=888)],
+                                    orders=[pending(ticket=666, volume_current=0.01)]))
+    outcome = execute(make_signal(message_type='modify', order_id='666',
+                                  entry='1.13000', sl=0, tp=0))
+    assert outcome.ok
+    _, place_req = fake.sent_requests
+    assert place_req['volume'] == 0.09  # size ricalcolata, non lo 0.01 originale
+    assert place_req['price'] == 1.13 and place_req['comment'] == '@1.1300'
+
+
+def test_modify_pending_passes_open_positions_flag_to_resize(monkeypatch):
+    # L'executor deve dire al resize se ci sono POSIZIONI aperte sull'asset
+    # (non i pending): decide se il ricalcolo può scendere o solo salire
+    seen = {}
+
+    def spy(signal, vol, si, ai, has_open):
+        seen['has_open'] = has_open
+        return vol
+    monkeypatch.setattr(executor, 'resize_volume_to_balance', spy)
+
+    # Una posizione aperta sullo stesso asset (EURUSD) + il pending da modificare
+    use(monkeypatch, FakeMT5(send_results=[result(RETCODE_DONE), result(RETCODE_DONE, order=888)],
+                             positions=[position(ticket=555, symbol="EURUSD")],
+                             orders=[pending(ticket=666, symbol="EURUSD")]))
+    execute(make_signal(message_type='modify', order_id='666', entry='1.13000', sl=0, tp=0))
+    assert seen['has_open'] is True
+
+    # Nessuna posizione aperta sull'asset del pending
+    seen.clear()
+    use(monkeypatch, FakeMT5(send_results=[result(RETCODE_DONE), result(RETCODE_DONE, order=888)],
+                             orders=[pending(ticket=666, symbol="EURUSD")]))
+    execute(make_signal(message_type='modify', order_id='666', entry='1.13000', sl=0, tp=0))
+    assert seen['has_open'] is False
 
 
 def test_modify_pending_replace_failure_is_critical(monkeypatch):

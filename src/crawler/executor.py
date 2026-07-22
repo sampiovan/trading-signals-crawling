@@ -14,7 +14,7 @@ from collections import namedtuple
 from crawler import mt5_client
 from crawler.comments import format_price_comment
 from crawler.config import load_config, get_mt5_setting
-from crawler.risk import compute_lot
+from crawler.risk import compute_lot, resize_volume_to_balance
 
 try:
 	import MetaTrader5 as mt5
@@ -256,11 +256,17 @@ def _do_modify(signal):
 		if not removed.ok:
 			return removed
 
+		# "posizioni attive per quell'asset" = posizioni APERTE (non i pending):
+		# decide se il ricalcolo della size può scendere o solo salire
+		has_open = bool(mt5.positions_get(symbol=order.symbol))
+
 		def build():
 			return {
 				'action': TRADE_ACTION_PENDING,
 				'symbol': order.symbol,
-				'volume': order.volume_current,
+				'volume': resize_volume_to_balance(signal, order.volume_current,
+				                                   mt5.symbol_info(order.symbol),
+				                                   mt5.account_info(), has_open),
 				'type': order.type,
 				'price': new_price,
 				'sl': new_sl,

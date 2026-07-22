@@ -62,16 +62,17 @@ _blackout_active = False
 _TRUE_VALUES = ('true', '1', 'yes', 'si', 'sì')
 
 
-def _guard_setting(key, default):
-	return get_setting(load_config(), 'guard', key, default=default)
+def _guard_setting(key):
+	"""Legge una chiave [guard] obbligatoria (garantita presente dalla validazione all'avvio)."""
+	return get_setting(load_config(), 'guard', key)
 
 
-def _guard_flag(key, default):
-	return _guard_setting(key, default).lower() in _TRUE_VALUES
+def _guard_flag(key):
+	return _guard_setting(key).lower() in _TRUE_VALUES
 
 
 def _cut_loss_percent():
-	return float(_guard_setting('CUT_LOSS_PERCENT', '2.5') or 2.5)
+	return float(_guard_setting('CUT_LOSS_PERCENT'))
 
 
 def _cut_loss_threshold():
@@ -140,18 +141,29 @@ async def _cut_and_reopen(client, pos, parsed, cut_loss):
 	cumulative = prev_loss + loss_amount
 	comment = format_loss_comment(price_str, cumulative)
 
-	reopened = executor.open_market(pos.symbol, pos.type, pos.volume,
+	# Riapertura = continuazione della stessa esposizione: in MODE=BALANCE la
+	# size segue il balance cresciuto ma SOLO verso l'alto (has_open_positions
+	# forzato a True, mai al ribasso a caldo). Fuori da BALANCE, o senza
+	# deposito/account noti, resta pos.volume (noop). La posizione appena
+	# chiusa non è più su positions_get, quindi non si deduce il flag da lì.
+	# In BALANCE il sizing legge solo signal['asset'] (compute_lot -> _balance_lot):
+	# basta un dict con l'asset, senza gli altri campi di un segnale del canale.
+	volume = risk.resize_volume_to_balance(
+		{'asset': pos.symbol}, pos.volume, mt5.symbol_info(pos.symbol),
+		mt5.account_info(), has_open_positions=True)
+
+	reopened = executor.open_market(pos.symbol, pos.type, volume,
 	                                pos.sl, pos.tp, pos.magic, comment)
 	if reopened.ok:
 		logger.info(
-			f"Guardia: riaperta {pos.symbol} {pos.volume} lotti (ticket {reopened.ticket}), "
+			f"Guardia: riaperta {pos.symbol} {volume} lotti (ticket {reopened.ticket}), "
 			f"perdita realizzata {loss_amount}, commento '{comment}'."
 		)
 	else:
 		await _alert(client,
 		             f"POSIZIONE SCOPERTA: {pos.symbol} tagliata (ticket {pos.ticket}) ma "
 		             f"riapertura fallita: {reopened.message}. Riaprire a mano "
-		             f"{pos.volume} lotti {'BUY' if pos.type == 0 else 'SELL'} "
+		             f"{volume} lotti {'BUY' if pos.type == 0 else 'SELL'} "
 		             f"con SL {pos.sl} TP {pos.tp}, commento '{comment}'.")
 
 
@@ -189,8 +201,8 @@ def _in_news_blackout():
 	"""True se la guardia è sospesa per una notizia ad alto impatto (logga le transizioni)."""
 	global _blackout_active
 	event = None
-	if _guard_flag('NEWS_BLACKOUT', 'true'):
-		minutes = float(_guard_setting('NEWS_BLACKOUT_MINUTES', '30') or 0)
+	if _guard_flag('NEWS_BLACKOUT'):
+		minutes = float(_guard_setting('NEWS_BLACKOUT_MINUTES'))
 		event = news_calendar.in_blackout(minutes)
 	if event is not None and not _blackout_active:
 		logger.info(f"Guardia in blackout notizie ({event['country']} {event['title']}): tagli sospesi.")
@@ -209,8 +221,8 @@ async def check_positions_once(client):
 	if cut_loss is None:
 		logger.warning("Guardia: deposito iniziale non disponibile, soglia non calcolabile: passata saltata.")
 		return
-	min_age = float(_guard_setting('MIN_AGE_SECONDS', '300') or 0)
-	spread_factor = float(_guard_setting('SPREAD_FACTOR', '2') or 0)
+	min_age = float(_guard_setting('MIN_AGE_SECONDS'))
+	spread_factor = float(_guard_setting('SPREAD_FACTOR'))
 
 	for pos in (mt5.positions_get() or ()):
 		# Trigger sulla sola perdita di prezzo (esclusi swap/commissioni)
@@ -241,11 +253,11 @@ async def check_positions_once(client):
 
 async def run_guard(client, news_cache_path=None):
 	"""Loop della guardia: un check ogni INTERVAL_SECONDS, robusto agli errori."""
-	if not _guard_flag('ENABLED', 'true'):
+	if not _guard_flag('ENABLED'):
 		logger.info("Guardia posizioni disabilitata da config ([guard] ENABLED).")
 		return
 
-	interval = float(_guard_setting('INTERVAL_SECONDS', '60') or 60)
+	interval = float(_guard_setting('INTERVAL_SECONDS'))
 	cut_loss = _cut_loss_threshold()
 	threshold = f"-{cut_loss:.0f}" if cut_loss is not None else "deposito non ancora noto"
 	cut_percent = _cut_loss_percent()
@@ -254,7 +266,7 @@ async def run_guard(client, news_cache_path=None):
 		f"del budget giornaliero ({threshold}), check ogni {interval:.0f}s."
 	)
 
-	news_enabled = _guard_flag('NEWS_BLACKOUT', 'true') and news_cache_path is not None
+	news_enabled = _guard_flag('NEWS_BLACKOUT') and news_cache_path is not None
 
 	while True:
 		try:

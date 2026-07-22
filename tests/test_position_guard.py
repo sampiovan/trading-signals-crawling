@@ -83,11 +83,24 @@ class FakeClient:
         self.alerts.append((target, text))
 
 
+# Tutte le chiavi [guard]/[risk] valorizzate (ora sono obbligatorie: niente
+# più default inline nel codice). Soglia di taglio = 2.5% del budget 5% su 100k = 125.
+SETTINGS = {
+    # [guard]
+    'ENABLED': 'true', 'CUT_LOSS_PERCENT': '2.5', 'INTERVAL_SECONDS': '15',
+    'MIN_AGE_SECONDS': '300', 'SPREAD_FACTOR': '2',
+    'NEWS_BLACKOUT': 'true', 'NEWS_BLACKOUT_MINUTES': '30',
+    # [risk]
+    'MODE': 'BALANCE', 'FIXED_LOT': '0.01', 'RISK_PERCENT': '1.0',
+    'DAILY_LOSS_PERCENT': '5', 'AVAILABLE_PERCENT': '10',
+    'BALANCE_STEP': '1000', 'LOT_PER_STEP': '0.01',
+}
+
+
 @pytest.fixture(autouse=True)
 def wire_stub(monkeypatch):
     """Config con soglia 125 (2.5% del budget 5% su 100k), stub condiviso guardia+executor."""
-    values = {'CUT_LOSS_PERCENT': '2.5', 'DAILY_LOSS_PERCENT': '5',
-              'INTERVAL_SECONDS': '15', 'ENABLED': 'true'}
+    values = dict(SETTINGS)
     monkeypatch.setattr(risk, '_initial_deposit', 100000.0)
     monkeypatch.setattr(position_guard, 'load_config', lambda: None)
     monkeypatch.setattr(position_guard, 'get_setting',
@@ -225,7 +238,7 @@ def test_news_blackout_suspends_guard_on_all_assets(monkeypatch):
 
 
 def test_news_blackout_disabled_cuts(monkeypatch):
-    values = {'NEWS_BLACKOUT': 'false'}
+    values = dict(SETTINGS, NEWS_BLACKOUT='false')
     monkeypatch.setattr(position_guard, 'get_setting',
                         lambda cfg, section, key, default='': values.get(key, default))
     monkeypatch.setattr(news_calendar, '_events', [_high_impact_event_now("USD")])
@@ -291,6 +304,27 @@ def test_cut_and_reopen_flow(monkeypatch):
     # -127.0 - 2.1 - 0.7 - 0.7 = -130.5 -> perdita 130 (round half-to-even)
     assert reopen_req['comment'] == '@1.3390 (-130)'
     assert client.alerts == []
+
+
+@pytest.mark.parametrize("balance,expected_volume", [
+    # Conto cresciuto (200k, deposito 100k): disponibile 200k-90k=110k ->
+    # 110 scalini da 0.01 = 1.10 lotti -> riapre alla size BALANCE cresciuta
+    (200000.0, 1.10),
+    # Conto sceso (95k): disponibile 95k-90k=5k -> 5 scalini = 0.05, ma la
+    # riapertura della guardia non scende MAI sotto il volume originale (0.10)
+    (95000.0, 0.10),
+])
+def test_reopen_resizes_volume_up_only_on_balance(monkeypatch, balance, expected_volume):
+    class BalanceMT5(FakeMT5):
+        def account_info(self):
+            return SimpleNamespace(equity=balance, balance=balance)
+
+    fake = use(monkeypatch, BalanceMT5(
+        positions=[position(profit=-130.0, volume=0.10)],
+        deals=[deal(entry=ENTRY_IN), deal(profit=-130.0)]))
+    run(check_positions_once(FakeClient()))
+    # sent_requests[1] = riapertura: volume ricalcolato sul balance, solo su
+    assert fake.sent_requests[1]['volume'] == expected_volume
 
 
 def test_losses_accumulate_across_cuts(monkeypatch):
@@ -359,7 +393,7 @@ def test_failed_reopen_alerts_uncovered_position(monkeypatch):
 
 
 def test_run_guard_disabled_exits_immediately(monkeypatch):
-    values = {'ENABLED': 'false'}
+    values = dict(SETTINGS, ENABLED='false')
     monkeypatch.setattr(position_guard, 'get_setting',
                         lambda cfg, section, key, default='': values.get(key, default))
     # Se non uscisse subito, asyncio.run non terminerebbe (loop infinito)

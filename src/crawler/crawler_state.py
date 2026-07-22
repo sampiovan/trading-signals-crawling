@@ -1,8 +1,6 @@
 """
 Persistenza dello stato del crawler (file JSON accanto al config):
-- last_message_id: ultimo messaggio Telegram processato (per il catch-up);
-- initial_deposit: deposito iniziale rilevato al primo avvio (per il sizing
-  MODE=BALANCE), quando non è specificato in config.
+- last_message_id: ultimo messaggio Telegram processato (per il catch-up).
 """
 import json
 import logging
@@ -58,17 +56,4 @@ def save_last_message_id(message_id, path=STATE_FILENAME):
 	"""Salva l'ID dell'ultimo messaggio processato (preserva le altre chiavi)."""
 	state = _load_state(path)
 	state['last_message_id'] = int(message_id)
-	_save_state(state, path)
-
-
-def load_initial_deposit(path=STATE_FILENAME):
-	"""Deposito iniziale rilevato in un avvio precedente, o None."""
-	value = _load_state(path).get('initial_deposit')
-	return float(value) if value is not None else None
-
-
-def save_initial_deposit(value, path=STATE_FILENAME):
-	"""Persiste il deposito iniziale rilevato (preserva le altre chiavi)."""
-	state = _load_state(path)
-	state['initial_deposit'] = float(value)
 	_save_state(state, path)
