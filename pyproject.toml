@@ -16,7 +16,10 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=9.0",
-    "ruff>=0.15",
+    # Minor pinnata: le regole di DEFAULT di ruff cambiano tra le minor e la
+    # CI installa sempre l'ultima, quindi senza limite la lint diventa rossa
+    # da sola (è successo: PR #17). Le regole sono comunque dichiarate sotto.
+    "ruff>=0.15,<0.16",
 ]
 
 [project.scripts]
@@ -34,3 +37,15 @@ testpaths = ["tests"]
 
 [tool.ruff]
 target-version = "py312"
+
+# Regole DICHIARATE, non ereditate dai default di ruff: i default cambiano
+# tra le versioni e facevano fallire la CI su codice non toccato. Questo
+# elenco è esattamente ciò che il progetto già rispetta.
+[tool.ruff.lint]
+select = [
+    "E4", "E7", "E9",	# pycodestyle: import, statement, sintassi
+    "F",				# pyflakes: import inutilizzati, nomi non definiti
+    "I",				# isort: blocchi di import ordinati
+    "UP",				# pyupgrade: costrutti obsoleti per py312
+    "BLE",				# flake8-blind-except: except Exception non motivati
+]

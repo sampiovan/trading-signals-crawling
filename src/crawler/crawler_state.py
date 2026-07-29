@@ -16,7 +16,7 @@ def _load_state(path):
 	if not os.path.exists(path):
 		return {}
 	try:
-		with open(path, 'r', encoding='utf-8') as f:
+		with open(path, encoding='utf-8') as f:
 			state = json.load(f)
 		return state if isinstance(state, dict) else {}
 	except (ValueError, OSError, json.JSONDecodeError):
