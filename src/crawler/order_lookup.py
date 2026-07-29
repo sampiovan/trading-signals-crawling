@@ -110,7 +110,8 @@ def get_order_ticket(asset, entry, signal_type, tol_pips=2, allow_comment_fallba
 		# ripiegare sul commento (resolve_symbol solleva ValueError, ma sotto
 		# c'è il package MT5: restringere qui farebbe perdere il segnale)
 		if not allow_comment_fallback:
-			logger.warning(f"Lookup: simbolo non risolvibile per asset {target_asset}.")
+			logger.warning(f"Lookup: simbolo non risolvibile per asset {target_asset} "
+			               f"(ripiego sul commento disattivato).")
 			return None, None
 		return _comment_fallback(target_asset, entry, target_signal, 'simbolo non risolvibile')
 
@@ -157,6 +158,10 @@ def get_order_ticket(asset, entry, signal_type, tol_pips=2, allow_comment_fallba
 		return str(best[0]), str(best[1])
 
 	if not allow_comment_fallback:
+		# Come ogni altro vicolo cieco del lookup, lascia traccia: senza, il
+		# ramo più frequente (la deduplica del catch-up) sarebbe muto
+		logger.warning(f"Lookup: nessun ordine corrispondente sul simbolo {target_asset} "
+		               f"(ripiego sul commento disattivato).")
 		return None, None
 
 	# Sul simbolo dichiarato non c'è nulla: può essere l'asset sbagliato ma

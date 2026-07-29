@@ -25,11 +25,17 @@ async def _alert(client, text):
 		logger.exception("Impossibile inviare la notifica Telegram.")
 
 
+def _signal_detail(signal):
+	"""Descrizione compatta del segnale per log e notifiche."""
+	return (f"{signal['message_type']} {signal['signal_type']} "
+	        f"{signal['asset']} @{signal['entry']}")
+
+
 async def notify_failure(client, signal, outcome):
 	"""Notifica un fallimento definitivo nei Saved Messages di Telegram."""
 	await _alert(client, (
 		"⚠️ Esecuzione segnale FALLITA\n"
-		f"Tipo: {signal['message_type']} {signal['signal_type']} {signal['asset']}\n"
+		f"Tipo: {_signal_detail(signal)}\n"
 		f"Dettaglio: {outcome.message} (retcode={outcome.retcode})"
 	))
 
@@ -114,17 +120,16 @@ async def process_message(client, message, state_path, catching_up=False):
 		for signal in signals:
 			if (catching_up and signal['message_type'] in ('placement', 'open')
 					and not signal['order_id'] and _already_executed(signal)):
-				detail = (f"{signal['message_type']} {signal['signal_type']} "
-				          f"{signal['asset']} @{signal['entry']}")
+				skipped_signal = _signal_detail(signal)
 				logger.warning(
-					f"Catch-up: {detail} risulta già eseguito "
+					f"Catch-up: {skipped_signal} risulta già eseguito "
 					f"(crash prima del salvataggio dello stato?): salto il doppione."
 				)
 				# Un'apertura NON eseguita non deve restare sepolta nel log:
 				# se la deduplica sbagliasse, il segnale sarebbe perso in silenzio
 				await _alert(client, (
 					"⚠️ Catch-up: apertura SALTATA come già eseguita\n"
-					f"Segnale: {detail}\n"
+					f"Segnale: {skipped_signal}\n"
 					"Verificare sul terminale che la posizione esista davvero."
 				))
 				continue

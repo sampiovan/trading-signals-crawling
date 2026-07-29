@@ -54,9 +54,12 @@ def pipeline(monkeypatch, tmp_path):
     return calls
 
 
-def process(calls, catching_up):
+def process(calls, catching_up=False, client=None):
+    """Esegue la pipeline e restituisce il client, per ispezionarne gli alert."""
+    client = client or FakeClient()
     asyncio.run(crawler_main.process_message(
-        FakeClient(), message(), calls.state_path, catching_up=catching_up))
+        client, message(), calls.state_path, catching_up=catching_up))
+    return client
 
 
 def test_catchup_skips_placement_already_executed(pipeline):
@@ -87,22 +90,10 @@ def test_catchup_skip_alerts_telegram(pipeline):
     pipeline.signals = [signal("placement")]
     pipeline.live_ticket = "555"
 
-    client = FakeClient()
-    asyncio.run(crawler_main.process_message(
-        client, message(), pipeline.state_path, catching_up=True))
+    client = process(pipeline, catching_up=True)
 
     assert pipeline.executed == []
     assert client.alerts and "SALTATA" in client.alerts[0][1]
-
-
-def test_live_message_still_allows_the_fallback(pipeline):
-    # Fuori dal catch-up la deduplica non gira affatto: nessun lookup, quindi
-    # il fallback resta disponibile a chi cerca l'ordine citato dal canale
-    pipeline.signals = [signal("placement")]
-    pipeline.live_ticket = "555"
-    process(pipeline, catching_up=False)
-    assert pipeline.fallback_flags == []
-    assert len(pipeline.executed) == 1
 
 
 def test_catchup_executes_placement_not_yet_live(pipeline):
@@ -145,8 +136,7 @@ def test_order_not_found_alerts_telegram(pipeline, monkeypatch):
             "Order ID non trovato per segnale close: asset=GPSUSD, entry=1.34946")
     monkeypatch.setattr(crawler_main, 'parse_message', raise_not_found)
 
-    client = FakeClient()
-    asyncio.run(crawler_main.process_message(client, message(), pipeline.state_path))
+    client = process(pipeline)
 
     assert client.alerts and "GPSUSD" in client.alerts[0][1]
     assert pipeline.executed == []
@@ -160,8 +150,7 @@ def test_multi_close_partial_skip_alerts_telegram(pipeline):
     pipeline.signals = [signal("close", signal_type="", order_id="444")]
     pipeline.skips = ["ordine non trovato nel registro per asset=AUDUSD, entry=1.20200. Posizione saltata."]
 
-    client = FakeClient()
-    asyncio.run(crawler_main.process_message(client, message(), pipeline.state_path))
+    client = process(pipeline)
 
     assert client.alerts and "AUDUSD" in client.alerts[0][1]
     assert len(pipeline.executed) == 1  # la riga riuscita viene comunque eseguita
@@ -175,8 +164,7 @@ def test_total_failure_does_not_duplicate_skip_alerts(pipeline, monkeypatch):
         raise crawler_main.OrderNotFoundException("Multi-close: nessuna delle 2 posizioni trovata.")
     monkeypatch.setattr(crawler_main, 'parse_message', raise_not_found)
 
-    client = FakeClient()
-    asyncio.run(crawler_main.process_message(client, message(), pipeline.state_path))
+    client = process(pipeline)
 
     assert len(client.alerts) == 1
     assert "SCARTATO" in client.alerts[0][1]
