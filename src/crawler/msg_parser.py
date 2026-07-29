@@ -164,7 +164,7 @@ def _move_sl_signal(asset, sl_value):
 
 # -------------------- Dispatcher --------------------
 
-def parse_message(message_text, reply_text=None):
+def parse_message(message_text, reply_text=None, on_skip=None):
 	"""
 	Funzione principale che prova a riconoscere il tipo di messaggio
 	chiamando in sequenza le funzioni dedicate. Le lookup degli ordini
@@ -172,6 +172,10 @@ def parse_message(message_text, reply_text=None):
 
 	reply_text è il testo del messaggio Telegram citato (se il messaggio
 	è una risposta): alcuni parser lo usano per risalire all'ordine.
+
+	on_skip riceve le righe saltate di un multi-close: sono scarti che NON
+	sollevano (le altre posizioni vanno eseguite lo stesso), quindi senza
+	questo callback resterebbero visibili solo nel log.
 
 	Restituisce:
 	- None se il messaggio non è riconosciuto;
@@ -189,7 +193,7 @@ def parse_message(message_text, reply_text=None):
 		parse_order_modify,
 		parse_move_sl_all,
 		lambda text: parse_move_sl_breakeven(text, reply_text),
-		parse_orders_multi_close,	# PRIMA del close singolo: il suo pattern è più generico e catturerebbe (male) i multi-close
+		lambda text: parse_orders_multi_close(text, on_skip),	# PRIMA del close singolo: il suo pattern è più generico e catturerebbe (male) i multi-close
 		parse_close_notification,	# idem: notifiche di chiusura automatica, nessuna azione
 		parse_order_close,
 		parse_order_cancel
@@ -401,7 +405,7 @@ def parse_move_sl_breakeven(text, reply_text=None):
 	return _move_sl_signal(asset, sl_value)
 
 
-def parse_orders_multi_close(text):
+def parse_orders_multi_close(text, on_skip=None):
 	"""
 	Riconosce un messaggio di chiusura di PIÙ posizioni e restituisce
 	una lista di segnali 'close', uno per posizione. Le posizioni possono
@@ -425,14 +429,29 @@ def parse_orders_multi_close(text):
 		logger.warning("Messaggio multi-close riconosciuto ma nessuna posizione estratta.")
 		return None
 
+	def skipped(detail):
+		"""Riga saltata: log + notifica al chiamante (il successo parziale non solleva)."""
+		logger.error(f"Multi-close: {detail}")
+		if on_skip:
+			on_skip(detail)
+
 	signals = []
 	for raw_asset, entry_price in positions:
 		asset = raw_asset.upper().replace("/", "")
 		try:
-			signals.append(_close_signal(asset, _clean_price(entry_price)))
+			signal = _close_signal(asset, _clean_price(entry_price))
 		except OrderNotFoundException:
 			# Successo parziale: non scartare le altre posizioni del messaggio
-			logger.error(f"Multi-close: ordine non trovato nel registro per asset={asset}, entry={entry_price}. Posizione saltata.")
+			skipped(f"ordine non trovato nel registro per asset={asset}, entry={entry_price}. Posizione saltata.")
+			continue
+		# Il lookup può ripiegare sul commento ignorando l'asset (asset
+		# sbagliato ma esistente): due righe diverse possono così finire
+		# sullo STESSO ticket. Chiuderlo due volte non ha senso.
+		if any(s['order_id'] == signal['order_id'] for s in signals):
+			skipped(f"asset={asset}, entry={entry_price} risolve sul ticket {signal['order_id']}, "
+			        f"già indicato da un'altra riga del messaggio. Posizione saltata.")
+			continue
+		signals.append(signal)
 
 	if not signals:
 		raise OrderNotFoundException(

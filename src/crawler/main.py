@@ -76,18 +76,28 @@ async def process_message(client, message, state_path, catching_up=False):
 	except Exception:
 		logger.exception("Impossibile recuperare il messaggio citato, proseguo senza.")
 
+	# Scarti che NON sollevano: le righe saltate di un multi-close riuscito
+	# in parte. Vanno notificate come gli scarti totali, altrimenti una
+	# chiusura persa resta visibile solo nel log.
+	skipped = []
 	try:
-		signals = parse_message(message_text, reply_text=reply_text)
+		signals = parse_message(message_text, reply_text=reply_text, on_skip=skipped.append)
 	except OrderNotFoundException as e:
 		# Segnale riconosciuto ma ordine non trovato tra posizioni/pending
 		# live: scarto definitivo, quindi va notificato come i fallimenti
 		# di esecuzione (es. una chiusura persa non deve passare inosservata)
 		logger.error(f"Ordine non trovato sul conto, segnale scartato: {e}")
 		await _alert(client, f"⚠️ Segnale SCARTATO: ordine non trovato sul conto\nDettaglio: {e}")
+		# Il fallimento TOTALE è già coperto da questo alert: non ripetere
+		# le singole righe che l'hanno composto
+		skipped.clear()
 		signals = None
 	except Exception:
 		logger.exception("Errore inatteso nel parsing del messaggio, segnale scartato.")
 		signals = None
+
+	for detail in skipped:
+		await _alert(client, f"⚠️ Posizione SALTATA in un multi-close\nDettaglio: {detail}")
 
 	if signals is None:
 		logger.info("Messaggio non riconosciuto come segnale di trading (o scartato).")
