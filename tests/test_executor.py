@@ -80,9 +80,13 @@ def make_signal(**overrides):
 
 @pytest.fixture(autouse=True)
 def wire_stub(monkeypatch):
-    """Config neutro, niente sleep nei retry, resolve_symbol identità, lotto fisso."""
+    """Config neutro (anche in mt5_client: nessun SYMBOL_SUFFIX), niente sleep
+    nei retry, resolve_symbol identità, lotto fisso."""
     monkeypatch.setattr(executor, 'load_config', lambda: None)
     monkeypatch.setattr(executor, 'get_mt5_setting',
+                        lambda cfg, key, default='': default)
+    monkeypatch.setattr(mt5_client, 'load_config', lambda: None)
+    monkeypatch.setattr(mt5_client, 'get_mt5_setting',
                         lambda cfg, key, default='': default)
     monkeypatch.setattr(executor, 'compute_lot', lambda signal, si, ai: 0.01)
     # Default: la modifica di un pending mantiene il volume originale
@@ -190,6 +194,38 @@ def test_modify_pending_removes_and_replaces_with_new_comment(monkeypatch):
     assert place_req['sl'] == 1.05 and place_req['tp'] == 1.30  # 0 = invariato
     assert place_req['volume'] == 0.05 and place_req['magic'] == 54321  # ereditati dal pending
     assert place_req['comment'] == '@1.1300'  # commento aggiornato al nuovo prezzo
+
+
+def test_modify_pending_comment_uses_real_symbol_pip(monkeypatch):
+    # Il canale può dichiarare l'asset sbagliato (il lookup ripiega sul commento
+    # "@prezzo"): il pip del nuovo commento deve venire dal simbolo REALE del
+    # pending, altrimenti una USDJPY riceve "@145.5030" e non è più ritrovabile
+    fake = use(monkeypatch, FakeMT5(send_results=[result(RETCODE_DONE), result(RETCODE_DONE, order=888)],
+                                    orders=[pending(ticket=666, symbol="USDJPY")]))
+    outcome = execute(make_signal(message_type='modify', order_id='666',
+                                  asset='EURUSD', entry='145.5030', sl=0, tp=0))
+    assert outcome.ok
+    _, place_req = fake.sent_requests
+    assert place_req['comment'] == '@145.50'  # 2 decimali: USDJPY, non l'EURUSD del messaggio
+
+
+def test_modify_pending_comment_ignores_broker_suffix(monkeypatch):
+    # Il simbolo del terminale porta il suffisso del broker: va tolto prima di
+    # dedurre il pip, altrimenti "USDJPY.m" non finisce per JPY
+    monkeypatch.setattr(mt5_client, 'get_mt5_setting',
+                        lambda cfg, key, default='': '.m' if key == 'SYMBOL_SUFFIX' else default)
+
+    fake = use(monkeypatch, FakeMT5(send_results=[result(RETCODE_DONE), result(RETCODE_DONE, order=888)],
+                                    orders=[pending(ticket=666, symbol="USDJPY.m")]))
+    execute(make_signal(message_type='modify', order_id='666',
+                        asset='EURUSD', entry='145.5030', sl=0, tp=0))
+    assert fake.sent_requests[1]['comment'] == '@145.50'
+
+    # ...e un simbolo non-JPY col suffisso resta a 4 decimali
+    fake = use(monkeypatch, FakeMT5(send_results=[result(RETCODE_DONE), result(RETCODE_DONE, order=888)],
+                                    orders=[pending(ticket=666, symbol="EURUSD.m")]))
+    execute(make_signal(message_type='modify', order_id='666', entry='1.13000', sl=0, tp=0))
+    assert fake.sent_requests[1]['comment'] == '@1.1300'
 
 
 def test_modify_pending_resizes_volume_via_helper(monkeypatch):

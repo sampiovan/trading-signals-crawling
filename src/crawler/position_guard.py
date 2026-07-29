@@ -39,7 +39,7 @@ messaggi Telegram (parsing ed esecuzione dei segnali) non è toccata.
 import asyncio
 import logging
 
-from crawler import executor, news_calendar, risk
+from crawler import executor, mt5_client, news_calendar, risk
 from crawler.comments import format_loss_comment, format_price_comment, parse_comment
 from crawler.config import get_setting, load_config
 
@@ -185,7 +185,7 @@ def _parse_or_adopt(pos):
 		f"Guardia: adotto {pos.symbol} ticket {pos.ticket} "
 		f"(commento '{comment}') al prezzo di apertura {pos.price_open}."
 	)
-	return parse_comment(format_price_comment(pos.symbol, pos.price_open))
+	return parse_comment(format_price_comment(mt5_client.strip_symbol_suffix(pos.symbol), pos.price_open))
 
 
 def _spread_cost(tick, sym_info, volume):

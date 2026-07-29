@@ -113,6 +113,8 @@ def wire_stub(monkeypatch):
     monkeypatch.setattr(executor, 'compute_lot', lambda signal, si, ai: 0.01)
     monkeypatch.setattr(executor.time, 'sleep', lambda s: None)
     monkeypatch.setattr(mt5_client, 'resolve_symbol', lambda asset: asset)
+    monkeypatch.setattr(mt5_client, 'load_config', lambda: None)
+    monkeypatch.setattr(mt5_client, 'get_mt5_setting', lambda cfg, key, default='': default)
 
     async def no_sleep(_seconds):
         pass
@@ -269,6 +271,20 @@ def test_adopts_positions_without_crawler_comment(monkeypatch, comment, magic):
 def test_adopted_jpy_price_uses_two_decimals(monkeypatch):
     fake = use(monkeypatch, FakeMT5(
         positions=[position(symbol="USDJPY", profit=-130.0, comment="placement",
+                            price_open=145.503)],
+        deals=[deal(entry=ENTRY_IN), deal(profit=-130.0)]))
+    run(check_positions_once(FakeClient()))
+    assert fake.sent_requests[1]['comment'] == '@145.50 (-130)'
+
+
+def test_adopted_jpy_price_ignores_broker_suffix(monkeypatch):
+    # Il simbolo della posizione arriva dal terminale col suffisso del broker:
+    # senza toglierlo "USDJPY.m" non finisce per JPY e l'adozione scriverebbe
+    # "@145.5030", un commento che nessun lookup successivo saprebbe ritrovare
+    monkeypatch.setattr(mt5_client, 'get_mt5_setting',
+                        lambda cfg, key, default='': '.m' if key == 'SYMBOL_SUFFIX' else default)
+    fake = use(monkeypatch, FakeMT5(
+        positions=[position(symbol="USDJPY.m", profit=-130.0, comment="placement",
                             price_open=145.503)],
         deals=[deal(entry=ENTRY_IN), deal(profit=-130.0)]))
     run(check_positions_once(FakeClient()))

@@ -61,7 +61,7 @@ def _comment_fallback(target_asset, entry, target_signal, reason):
 		if parsed is None:
 			continue
 		try:
-			expected = format_price_comment(item.symbol, entry).lstrip('@')
+			expected = format_price_comment(mt5_client.strip_symbol_suffix(item.symbol), entry).lstrip('@')
 		except (TypeError, ValueError):
 			continue
 		if parsed[0] == expected:
