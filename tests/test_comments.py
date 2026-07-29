@@ -1,5 +1,4 @@
-from crawler.comments import format_price_comment, format_loss_comment, parse_comment
-
+from crawler.comments import format_loss_comment, format_price_comment, parse_comment
 
 # ----- format_price_comment -----
 

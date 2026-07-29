@@ -9,10 +9,10 @@ Due modalità, configurabili nella sezione [risk] di config.ini:
 In ogni caso il volume viene normalizzato sui limiti del simbolo
 (volume_min / volume_max / volume_step).
 """
-import math
 import logging
+import math
 
-from crawler.config import load_config, get_setting
+from crawler.config import get_setting, load_config
 
 logger = logging.getLogger(__name__)
 

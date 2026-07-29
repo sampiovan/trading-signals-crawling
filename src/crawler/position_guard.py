@@ -40,8 +40,8 @@ import asyncio
 import logging
 
 from crawler import executor, news_calendar, risk
-from crawler.comments import parse_comment, format_loss_comment, format_price_comment
-from crawler.config import load_config, get_setting
+from crawler.comments import format_loss_comment, format_price_comment, parse_comment
+from crawler.config import get_setting, load_config
 
 try:
 	import MetaTrader5 as mt5

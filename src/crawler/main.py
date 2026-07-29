@@ -1,15 +1,16 @@
-import os
-import sys
+import argparse
 import asyncio
 import logging
-import argparse
+import os
+import sys
+
 from telethon import TelegramClient, events
 
 from crawler import executor, mt5_client, order_lookup, risk
-from crawler.config import load_config, get_setting
+from crawler.config import get_setting, load_config
 from crawler.crawler_state import load_last_message_id, save_last_message_id
 from crawler.log_setup import setup_logger
-from crawler.msg_parser import parse_message, OrderNotFoundException
+from crawler.msg_parser import OrderNotFoundException, parse_message
 from crawler.news_calendar import CACHE_FILENAME as NEWS_CACHE_FILENAME
 from crawler.position_guard import run_guard
 

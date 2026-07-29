@@ -13,8 +13,8 @@ usato dal lookup per ritrovare le posizioni anche dopo una riapertura.
 Nota: MT5 limita il commento a ~31 caratteri; questi formati restano
 ampiamente sotto il limite.
 """
-import re
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 

@@ -2,18 +2,17 @@ from types import SimpleNamespace
 
 import pytest
 
-from crawler import executor
-from crawler import mt5_client
+from crawler import executor, mt5_client
 from crawler.executor import (
-    execute,
-    TRADE_ACTION_DEAL,
-    TRADE_ACTION_PENDING,
-    TRADE_ACTION_SLTP,
-    TRADE_ACTION_REMOVE,
+    MAX_ATTEMPTS,
     ORDER_TYPE_BUY,
     ORDER_TYPE_SELL,
     RETCODE_DONE,
-    MAX_ATTEMPTS,
+    TRADE_ACTION_DEAL,
+    TRADE_ACTION_PENDING,
+    TRADE_ACTION_REMOVE,
+    TRADE_ACTION_SLTP,
+    execute,
 )
 
 

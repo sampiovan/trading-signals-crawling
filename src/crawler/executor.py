@@ -7,13 +7,13 @@ con retry sui retcode transitori e outcome sincrono.
 Come in mt5_client, l'import del package è difensivo: i test iniettano
 uno stub su `executor.mt5`.
 """
-import time
 import logging
+import time
 from collections import namedtuple
 
 from crawler import mt5_client
 from crawler.comments import format_price_comment
-from crawler.config import load_config, get_mt5_setting
+from crawler.config import get_mt5_setting, load_config
 from crawler.risk import compute_lot, resize_volume_to_balance
 
 try:

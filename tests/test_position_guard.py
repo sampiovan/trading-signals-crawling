@@ -1,11 +1,11 @@
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
 
 from crawler import executor, mt5_client, news_calendar, position_guard, risk
-from crawler.executor import TRADE_ACTION_DEAL, RETCODE_DONE
+from crawler.executor import RETCODE_DONE, TRADE_ACTION_DEAL
 from crawler.position_guard import check_positions_once
 
 BUY, SELL = 0, 1
@@ -223,7 +223,7 @@ def test_missing_tick_defers_cut(monkeypatch):
 
 def _high_impact_event_now(country="USD"):
     return {'title': 'CPI m/m', 'country': country,
-            'when': datetime.now(timezone.utc)}
+            'when': datetime.now(UTC)}
 
 
 def test_news_blackout_suspends_guard_on_all_assets(monkeypatch):

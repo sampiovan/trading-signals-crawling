@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 from crawler import mt5_client
-from crawler.mt5_client import connect, resolve_symbol, Mt5ConnectionError
+from crawler.mt5_client import Mt5ConnectionError, connect, resolve_symbol
 
 HEDGING = 2  # valore di ACCOUNT_MARGIN_MODE_RETAIL_HEDGING
 NETTING = 0

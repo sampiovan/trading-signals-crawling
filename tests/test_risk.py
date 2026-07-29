@@ -3,8 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 from crawler import risk
-from crawler.risk import compute_lot, resize_volume_to_balance, normalize_volume
-
+from crawler.risk import compute_lot, normalize_volume, resize_volume_to_balance
 
 # EURUSD a 5 cifre: tick 0.00001 vale 1$ per lotto standard
 EURUSD = SimpleNamespace(volume_min=0.01, volume_max=50.0, volume_step=0.01,
