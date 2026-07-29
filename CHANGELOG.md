@@ -32,6 +32,9 @@ giornaliero** (5% del deposito iniziale, con stop delle aperture all'80% del bud
   usi del lookup (chiusura, "Aperto", modifica, annullamento, move SL).
 - Il salto di un'apertura giudicata "già eseguita" durante il catch-up ora arriva
   anche nei Saved Messages: un ordine non eseguito non resta più solo nel log.
+- Il lookup logga ogni vicolo cieco anche col ripiego sul commento disattivato: il
+  ramo usato dalla deduplica del catch-up ritornava "non trovato" in silenzio,
+  mentre il gemello lo tracciava.
 - I decimali del commento "@prezzo" vengono ora dal **simbolo reale dell'ordine**,
   senza il `SYMBOL_SUFFIX` del broker, invece che dall'asset dichiarato dal messaggio
   o da un simbolo col suffisso (che non finisce per `JPY`). Una USDJPY finiva con

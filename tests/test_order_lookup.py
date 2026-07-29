@@ -188,6 +188,22 @@ def test_lookup_without_fallback_ignores_other_symbols(monkeypatch):
                             allow_comment_fallback=False) == (None, None)
 
 
+@pytest.mark.parametrize("unresolvable", [False, True])
+def test_lookup_without_fallback_always_logs_the_dead_end(monkeypatch, caplog, unresolvable):
+    # Ogni vicolo cieco del lookup deve lasciare traccia: i due rami (simbolo
+    # non risolvibile e nessun match sul simbolo) non devono divergere, o il
+    # più frequente — quello della deduplica del catch-up — resterebbe muto
+    use(monkeypatch, FakeMT5())
+    if unresolvable:
+        unresolvable_symbols(monkeypatch)
+
+    with caplog.at_level('WARNING'):
+        assert get_order_ticket("EURUSD", "1.12500", "",
+                                allow_comment_fallback=False) == (None, None)
+
+    assert "ripiego sul commento disattivato" in caplog.text
+
+
 def test_lookup_without_fallback_still_matches_the_right_symbol(monkeypatch):
     # Disattivare il fallback non indebolisce la ricerca normale: sull'asset
     # giusto la posizione si trova sia per prezzo sia per commento
