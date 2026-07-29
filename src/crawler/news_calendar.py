@@ -20,7 +20,7 @@ in UTC, senza dipendere dal fuso locale o da quello del server MT5.
 import json
 import logging
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,7 @@ def _parse_events(raw_events):
 		try:
 			if ev.get('impact') != 'High':
 				continue
-			when = datetime.fromisoformat(ev['date']).astimezone(timezone.utc)
+			when = datetime.fromisoformat(ev['date']).astimezone(UTC)
 			events.append({'title': ev.get('title', '?'), 'country': ev['country'], 'when': when})
 		except (KeyError, ValueError, TypeError):
 			logger.warning(f"Evento del calendario notizie non interpretabile, ignorato: {ev!r}")
@@ -80,7 +80,7 @@ def refresh(cache_path):
 	(asyncio.to_thread).
 	"""
 	global _events, _next_refresh, _warned_no_data
-	now = datetime.now(timezone.utc)
+	now = datetime.now(UTC)
 	if _next_refresh is not None and now < _next_refresh:
 		return
 
@@ -97,7 +97,9 @@ def refresh(cache_path):
 
 	try:
 		raw = _fetch_feed()
-	except Exception:
+	except Exception:	# noqa: BLE001 - fail-open voluto: qualunque errore di
+		# rete/parsing (URLError, timeout, SSL, HTTP...) non deve fermare la
+		# guardia, si ripiega sulla cache o si disattiva il blackout
 		_next_refresh = now + timedelta(minutes=RETRY_MINUTES)
 		if cache:
 			logger.warning("Feed del calendario notizie non raggiungibile: uso la cache scaduta.")
@@ -119,7 +121,7 @@ def in_blackout(minutes, now=None):
 	La notizia ad alto impatto (di QUALUNQUE valuta) in finestra
 	±minutes rispetto ad adesso, o None.
 	"""
-	now = now or datetime.now(timezone.utc)
+	now = now or datetime.now(UTC)
 	window = timedelta(minutes=float(minutes))
 	for ev in _events:
 		if abs(ev['when'] - now) <= window:

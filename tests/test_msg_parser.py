@@ -3,19 +3,18 @@ import pytest
 from crawler import msg_parser
 from crawler.msg_parser import (
     OrderNotFoundException,
-    parse_message,
+    parse_close_notification,
     parse_market_order,
-    parse_order_placement,
-    parse_order_open,
-    parse_order_modify,
+    parse_message,
     parse_move_sl_all,
     parse_move_sl_breakeven,
-    parse_orders_multi_close,
-    parse_close_notification,
-    parse_order_close,
     parse_order_cancel,
+    parse_order_close,
+    parse_order_modify,
+    parse_order_open,
+    parse_order_placement,
+    parse_orders_multi_close,
 )
-
 
 # ----- Messaggi di esempio (dal formato reale del canale) -----
 

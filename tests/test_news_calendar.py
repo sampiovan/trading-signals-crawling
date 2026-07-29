@@ -1,12 +1,12 @@
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
 from crawler import news_calendar
 from crawler.news_calendar import in_blackout, refresh
 
-NOW = datetime(2030, 7, 16, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2030, 7, 16, 12, 0, tzinfo=UTC)
 NY = timezone(timedelta(hours=-4))  # offset del feed (US/Eastern)
 
 
@@ -80,7 +80,7 @@ def write_cache(path, events, fetched_at):
 
 def test_fresh_cache_is_used_without_fetching(tmp_path, monkeypatch):
     cache = tmp_path / "news_calendar.json"
-    write_cache(cache, [feed_event()], datetime.now(timezone.utc))
+    write_cache(cache, [feed_event()], datetime.now(UTC))
     monkeypatch.setattr(news_calendar, '_fetch_feed',
                         lambda: pytest.fail("non deve scaricare con cache fresca"))
     refresh(str(cache))
@@ -89,7 +89,7 @@ def test_fresh_cache_is_used_without_fetching(tmp_path, monkeypatch):
 
 def test_stale_cache_triggers_fetch_and_caches_only_high(tmp_path, monkeypatch):
     cache = tmp_path / "news_calendar.json"
-    write_cache(cache, [], datetime.now(timezone.utc) - timedelta(hours=7))
+    write_cache(cache, [], datetime.now(UTC) - timedelta(hours=7))
     monkeypatch.setattr(news_calendar, '_fetch_feed',
                         lambda: [feed_event(), feed_event(impact="Low")])
     refresh(str(cache))
@@ -100,7 +100,7 @@ def test_stale_cache_triggers_fetch_and_caches_only_high(tmp_path, monkeypatch):
 
 def test_failed_fetch_falls_back_to_stale_cache(tmp_path, monkeypatch):
     cache = tmp_path / "news_calendar.json"
-    write_cache(cache, [feed_event()], datetime.now(timezone.utc) - timedelta(hours=7))
+    write_cache(cache, [feed_event()], datetime.now(UTC) - timedelta(hours=7))
 
     def boom():
         raise OSError("rete giu'")

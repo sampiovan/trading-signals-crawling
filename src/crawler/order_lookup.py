@@ -93,14 +93,16 @@ def get_order_ticket(asset, entry, signal_type, tol_pips=2):
 
 	try:
 		target_entry = float(entry)
-	except Exception:
+	except (TypeError, ValueError):
 		target_entry = 0.0
 
 	tol = tol_pips * pip_size(target_asset)
 
 	try:
 		symbol = mt5_client.resolve_symbol(target_asset)
-	except Exception:
+	except Exception:	# noqa: BLE001 - QUALUNQUE errore di risoluzione deve
+		# ripiegare sul commento (resolve_symbol solleva ValueError, ma sotto
+		# c'è il package MT5: restringere qui farebbe perdere il segnale)
 		return _comment_fallback(target_asset, entry, target_signal, 'simbolo non risolvibile')
 
 	# Il commento "@prezzo" è l'identificatore stabile del segnale: dopo un

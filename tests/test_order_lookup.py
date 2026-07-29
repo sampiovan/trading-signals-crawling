@@ -2,8 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from crawler import mt5_client
-from crawler import order_lookup
+from crawler import mt5_client, order_lookup
 from crawler.order_lookup import get_order_ticket, pip_size
 
 BUY, SELL, BUY_LIMIT, SELL_LIMIT = 0, 1, 2, 3

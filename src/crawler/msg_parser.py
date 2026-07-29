@@ -10,9 +10,9 @@ Contratto di parse_message(text, reply_text=None):
 I parser sono elencati (e definiti nel file) nell'ordine di dispatch:
 i pattern più specifici precedono quelli più generici.
 """
-import re
-import random
 import logging
+import random
+import re
 
 from crawler.order_lookup import get_order_ticket
 

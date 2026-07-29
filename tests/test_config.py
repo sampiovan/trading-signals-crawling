@@ -1,8 +1,7 @@
 import pytest
 
 from crawler import config as config_module
-from crawler.config import load_config, reset_config, get_mt5_setting
-
+from crawler.config import get_mt5_setting, load_config, reset_config
 
 VALID_CONFIG = """
 [telegram]
