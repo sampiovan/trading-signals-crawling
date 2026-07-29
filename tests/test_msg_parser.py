@@ -370,6 +370,33 @@ def test_multi_close_partial_lookup_failure(monkeypatch):
     assert signals[0]['order_id'] == '222'
 
 
+def test_multi_close_partial_failure_notifies_on_skip(monkeypatch):
+    # Il successo parziale NON solleva, quindi senza on_skip la posizione
+    # persa resterebbe visibile solo nel log (l'incidente del msg id=373)
+    def fake_lookup(asset, entry, signal_type):
+        return ('222', '22222') if entry == '1.21403' else (None, None)
+
+    monkeypatch.setattr(msg_parser, 'get_order_ticket', fake_lookup)
+    skipped = []
+    signals = parse_orders_multi_close(MSG_MULTI_CLOSE_2, on_skip=skipped.append)
+
+    assert len(signals) == 1
+    assert len(skipped) == 1
+    assert '1.21600' in skipped[0] and 'AUDNZD' in skipped[0]
+
+
+def test_multi_close_deduplicates_same_ticket(monkeypatch):
+    # Col fallback per commento una riga con l'asset sbagliato può risolvere
+    # sul ticket già indicato da un'altra riga: chiuderlo due volte non ha senso
+    monkeypatch.setattr(msg_parser, 'get_order_ticket', lambda *a: ('9', '99999'))
+    skipped = []
+    signals = parse_orders_multi_close(MSG_MULTI_CLOSE_2, on_skip=skipped.append)
+
+    assert len(signals) == 1
+    assert len(skipped) == 1
+    assert 'ticket 9' in skipped[0]
+
+
 def test_multi_close_all_lookups_fail(monkeypatch):
     monkeypatch.setattr(msg_parser, 'get_order_ticket', lambda *a: (None, None))
     with pytest.raises(OrderNotFoundException):
@@ -379,7 +406,11 @@ def test_multi_close_all_lookups_fail(monkeypatch):
 def test_multi_close_not_captured_by_single_close(monkeypatch):
     # Prima del fix il parser single-close catturava il messaggio multi
     # chiudendo UNA sola posizione: il dispatcher deve produrre N segnali
-    monkeypatch.setattr(msg_parser, 'get_order_ticket', lambda *a: ('9', '99999'))
+    # (ticket distinti: righe che risolvono sullo stesso ticket vengono
+    # deduplicate, vedi test_multi_close_deduplicates_same_ticket)
+    tickets = iter(['9', '10', '11', '12'])
+    monkeypatch.setattr(msg_parser, 'get_order_ticket',
+                        lambda *a: (next(tickets), '99999'))
 
     signals = parse_message(MSG_MULTI_CLOSE_4)
     assert len(signals) == 4

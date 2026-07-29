@@ -40,14 +40,17 @@ def pip_size(asset):
 	return 0.0001
 
 
-def _comment_fallback(target_asset, entry, target_signal):
+def _comment_fallback(target_asset, entry, target_signal, reason):
 	"""
-	Asset non risolvibile (refuso del canale, es. "GPS/USD" per GBP/USD):
-	il commento "@prezzo" resta un identificatore affidabile del segnale,
-	quindi viene cercato su TUTTE le posizioni e i pending del conto,
-	formattando il prezzo col pip del simbolo REALE di ogni candidato.
-	Si procede solo con un match UNIVOCO: con zero o più candidati il
-	segnale resta scartato come prima.
+	Asset inutilizzabile per il lookup, in due casi: non risolvibile
+	(refuso del canale, es. "GPS/USD" per GBP/USD) oppure risolvibile ma
+	SBAGLIATO (es. "AUD/USD" col prezzo di una AUD/NZD: il simbolo esiste,
+	quindi nessuno scarto naturale, ma su quel simbolo non c'è nulla).
+	In entrambi il commento "@prezzo" resta un identificatore affidabile
+	del segnale, quindi viene cercato su TUTTE le posizioni e i pending
+	del conto, formattando il prezzo col pip del simbolo REALE di ogni
+	candidato. Si procede solo con un match UNIVOCO: con zero o più
+	candidati il segnale resta scartato come prima.
 	"""
 	matches = []
 	candidates = tuple(mt5.positions_get() or ()) + tuple(mt5.orders_get() or ())
@@ -67,13 +70,13 @@ def _comment_fallback(target_asset, entry, target_signal):
 	if len(matches) == 1:
 		found, comment_price = matches[0]
 		logger.warning(
-			f"Lookup: asset {target_asset} non risolvibile, ma il commento @{comment_price} "
+			f"Lookup: {reason} per asset {target_asset}, ma il commento @{comment_price} "
 			f"identifica in modo univoco {found.symbol} ticket {found.ticket}: uso quello."
 		)
 		return str(found.ticket), str(found.magic)
 
 	ambiguous = f" e commento ambiguo ({len(matches)} candidati)" if matches else ""
-	logger.warning(f"Lookup: simbolo non risolvibile per asset {target_asset}{ambiguous}.")
+	logger.warning(f"Lookup: {reason} per asset {target_asset}{ambiguous}.")
 	return None, None
 
 
@@ -98,7 +101,7 @@ def get_order_ticket(asset, entry, signal_type, tol_pips=2):
 	try:
 		symbol = mt5_client.resolve_symbol(target_asset)
 	except Exception:
-		return _comment_fallback(target_asset, entry, target_signal)
+		return _comment_fallback(target_asset, entry, target_signal, 'simbolo non risolvibile')
 
 	# Il commento "@prezzo" è l'identificatore stabile del segnale: dopo un
 	# cut&reopen della guardia il price_open reale diverge dal prezzo del
@@ -141,4 +144,9 @@ def get_order_ticket(asset, entry, signal_type, tol_pips=2):
 		logger.info(f"Trovato ordine live: asset {target_asset}, entry {target_entry}, "
 		            f"ticket {best[0]}, magic {best[1]}")
 		return str(best[0]), str(best[1])
-	return None, None
+
+	# Sul simbolo dichiarato non c'è nulla: può essere l'asset sbagliato ma
+	# esistente (il canale scrive "AUD/USD" col prezzo di una AUD/NZD), che
+	# non solleva in resolve_symbol e quindi non passa dal ramo sopra.
+	return _comment_fallback(target_asset, entry, target_signal,
+	                         'nessun ordine corrispondente sul simbolo')

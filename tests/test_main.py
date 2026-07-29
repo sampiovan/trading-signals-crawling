@@ -30,10 +30,13 @@ class FakeClient:
 @pytest.fixture
 def pipeline(monkeypatch, tmp_path):
     """Pipeline con parser, executor e lookup finti; ritorna i registri delle chiamate."""
-    calls = SimpleNamespace(executed=[], lookups=[], signals=[], live_ticket=None)
+    calls = SimpleNamespace(executed=[], lookups=[], signals=[], live_ticket=None, skips=[])
 
-    monkeypatch.setattr(crawler_main, 'parse_message',
-                        lambda text, reply_text=None: calls.signals)
+    def fake_parse(text, reply_text=None, on_skip=None):
+        for detail in calls.skips:
+            on_skip(detail)
+        return calls.signals
+    monkeypatch.setattr(crawler_main, 'parse_message', fake_parse)
 
     def fake_execute(sig):
         calls.executed.append(sig)
@@ -101,7 +104,7 @@ def test_catchup_skips_market_open_already_executed(pipeline):
 def test_order_not_found_alerts_telegram(pipeline, monkeypatch):
     # Segnale riconosciuto ma ordine non trovato (es. refuso dell'asset nel
     # canale): lo scarto deve arrivare nei Saved Messages, non solo nel log
-    def raise_not_found(text, reply_text=None):
+    def raise_not_found(text, reply_text=None, on_skip=None):
         raise crawler_main.OrderNotFoundException(
             "Order ID non trovato per segnale close: asset=GPSUSD, entry=1.34946")
     monkeypatch.setattr(crawler_main, 'parse_message', raise_not_found)
@@ -113,6 +116,34 @@ def test_order_not_found_alerts_telegram(pipeline, monkeypatch):
     assert pipeline.executed == []
     from crawler.crawler_state import load_last_message_id
     assert load_last_message_id(path=pipeline.state_path) == 100  # lo stato avanza
+
+
+def test_multi_close_partial_skip_alerts_telegram(pipeline):
+    # L'incidente del msg id=373: 2 righe su 3 saltate, ma il messaggio è
+    # riuscito in parte -> nessuna eccezione, quindi nessun alert. Ora sì.
+    pipeline.signals = [signal("close", signal_type="", order_id="444")]
+    pipeline.skips = ["ordine non trovato nel registro per asset=AUDUSD, entry=1.20200. Posizione saltata."]
+
+    client = FakeClient()
+    asyncio.run(crawler_main.process_message(client, message(), pipeline.state_path))
+
+    assert client.alerts and "AUDUSD" in client.alerts[0][1]
+    assert len(pipeline.executed) == 1  # la riga riuscita viene comunque eseguita
+
+
+def test_total_failure_does_not_duplicate_skip_alerts(pipeline, monkeypatch):
+    # Se falliscono TUTTE, l'eccezione produce già il suo alert: le singole
+    # righe che l'hanno composta non vanno ripetute
+    def raise_not_found(text, reply_text=None, on_skip=None):
+        on_skip("asset=AUDNZD, entry=1.21600. Posizione saltata.")
+        raise crawler_main.OrderNotFoundException("Multi-close: nessuna delle 2 posizioni trovata.")
+    monkeypatch.setattr(crawler_main, 'parse_message', raise_not_found)
+
+    client = FakeClient()
+    asyncio.run(crawler_main.process_message(client, message(), pipeline.state_path))
+
+    assert len(client.alerts) == 1
+    assert "SCARTATO" in client.alerts[0][1]
 
 
 def test_catchup_close_is_never_deduplicated(pipeline):

@@ -144,6 +144,36 @@ def test_lookup_comment_fallback_requires_unique_match(monkeypatch):
     assert get_order_ticket("GPSUSD", "1.34946", "") == (None, None)
 
 
+def test_lookup_wrong_but_valid_asset_falls_back_to_comment(monkeypatch):
+    # Il caso reale (msg id=373): il canale scrive "AUD/USD (1.20200)" per una
+    # posizione AUD/NZD. AUDUSD ESISTE, quindi resolve_symbol non solleva e il
+    # fallback della #13 non scattava: la ricerca avveniva solo tra le AUDUSD
+    use(monkeypatch, FakeMT5(positions=[
+        position(500480335, "AUDNZD", 1.20180, SELL, 92925, comment="@1.2020"),
+    ]))
+    assert get_order_ticket("AUDUSD", "1.20200", "") == ("500480335", "92925")
+
+
+def test_lookup_wrong_asset_fallback_requires_unique_match(monkeypatch):
+    # Stesso prezzo di commento su due simboli: ambiguo, si scarta
+    use(monkeypatch, FakeMT5(positions=[
+        position(1, "AUDNZD", 1.20180, SELL, 111, comment="@1.2020"),
+        position(2, "EURUSD", 1.20200, BUY, 222, comment="@1.2020"),
+    ]))
+    assert get_order_ticket("AUDUSD", "1.20200", "") == (None, None)
+
+
+def test_lookup_fallback_wins_over_untouched_position_on_stated_asset(monkeypatch):
+    # Rischio accettato, documentato: sul simbolo DICHIARATO c'è una posizione
+    # (ma a un altro prezzo, fuori tolleranza) e il commento del segnale è
+    # univoco su un altro simbolo -> vince quest'ultimo
+    use(monkeypatch, FakeMT5(positions=[
+        position(1, "AUDUSD", 0.65400, BUY, 111, comment="@0.6540"),
+        position(2, "AUDNZD", 1.20180, SELL, 222, comment="@1.2020"),
+    ]))
+    assert get_order_ticket("AUDUSD", "1.20200", "") == ("2", "222")
+
+
 def test_lookup_comment_fallback_uses_real_symbol_pip(monkeypatch):
     # Refuso su una coppia JPY ("USDJPI"): il prezzo del commento va
     # arrotondato col pip del simbolo REALE del candidato (2 decimali),

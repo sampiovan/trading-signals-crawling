@@ -10,6 +10,22 @@ Il formato segue [Keep a Changelog](https://keepachangelog.com/it-IT/1.1.0/) e i
 In roadmap: **multi-canale** (impostazioni e rischio per canale) e **budget di perdita
 giornaliero** (5% del deposito iniziale, con stop delle aperture all'80% del budget).
 
+### Changed
+- Il fallback del lookup sul commento "@prezzo" copre ora anche l'asset **esistente
+  ma sbagliato** (es. "AUD/USD" col prezzo di una AUD/NZD), non solo quello
+  inesistente: prima il simbolo si risolveva senza errori e la ricerca restava
+  confinata a quel simbolo, quindi il segnale veniva scartato. Il fallback scatta
+  quando sul simbolo dichiarato non c'è nessun ordine corrispondente e richiede
+  sempre un match **univoco** su tutto il conto.
+
+### Fixed
+- Le posizioni saltate di una chiusura multipla riuscita **in parte** ora arrivano
+  come notifica nei Saved Messages: l'eccezione risale solo se falliscono tutte,
+  quindi un successo parziale restava visibile nel solo log (una chiusura persa
+  passava inosservata).
+- Chiusura multipla: due righe dello stesso messaggio che risolvono sullo **stesso
+  ticket** non producono più due chiusure: la seconda viene saltata e notificata.
+
 ## [2.3.0] - 2026-07-22
 
 ### Changed
