@@ -25,6 +25,13 @@ giornaliero** (5% del deposito iniziale, con stop delle aperture all'80% del bud
   passava inosservata).
 - Chiusura multipla: due righe dello stesso messaggio che risolvono sullo **stesso
   ticket** non producono più due chiusure: la seconda viene saltata e notificata.
+- I decimali del commento "@prezzo" vengono ora dal **simbolo reale dell'ordine**,
+  senza il `SYMBOL_SUFFIX` del broker, invece che dall'asset dichiarato dal messaggio
+  o da un simbolo col suffisso (che non finisce per `JPY`). Una USDJPY finiva con
+  "@145.5030" al posto di "@145.50" e perdeva il proprio identificatore: il ripiazzo
+  di un pending modificato e l'adozione di una posizione da parte della guardia
+  scrivevano il commento sbagliato, mentre il fallback del lookup sul commento non
+  agganciava mai le coppie JPY presso un broker con suffisso.
 
 ## [2.3.0] - 2026-07-22
 

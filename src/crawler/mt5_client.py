@@ -86,3 +86,14 @@ def resolve_symbol(asset):
 	if not info.visible and not mt5.symbol_select(symbol, True):
 		raise ValueError(f"Impossibile selezionare il simbolo '{symbol}' nel Market Watch.")
 	return symbol
+
+
+def strip_symbol_suffix(symbol):
+	"""
+	Inverso di resolve_symbol: toglie il suffisso del broker dal simbolo
+	reale (es. USDJPY.m -> USDJPY con SYMBOL_SUFFIX=.m). Serve dove il
+	simbolo torna dal terminale ma viene usato come asset per dedurre il
+	pip del commento: "USDJPY.m" non finisce per JPY.
+	"""
+	suffix = get_mt5_setting(load_config(), 'SYMBOL_SUFFIX')
+	return symbol.removesuffix(suffix) if suffix else symbol

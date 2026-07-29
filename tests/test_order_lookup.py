@@ -28,6 +28,10 @@ class FakeMT5:
 @pytest.fixture(autouse=True)
 def identity_symbols(monkeypatch):
     monkeypatch.setattr(mt5_client, 'resolve_symbol', lambda asset: asset)
+    # Config neutra: nessun SYMBOL_SUFFIX da togliere ai simboli dei candidati
+    monkeypatch.setattr(mt5_client, 'load_config', lambda: None)
+    monkeypatch.setattr(mt5_client, 'get_mt5_setting',
+                        lambda cfg, key, default='': default)
 
 
 def use(monkeypatch, fake):
@@ -182,3 +186,15 @@ def test_lookup_comment_fallback_uses_real_symbol_pip(monkeypatch):
     ]))
     unresolvable_symbols(monkeypatch)
     assert get_order_ticket("USDJPI", "145.503", "") == ("900030", "44444")
+
+
+def test_lookup_comment_fallback_strips_broker_suffix(monkeypatch):
+    # Il simbolo dei candidati arriva dal terminale col suffisso del broker:
+    # senza toglierlo "USDJPY.m" non finisce per JPY e il prezzo atteso
+    # ("145.5030") non combacerebbe mai col commento scritto a 2 decimali
+    monkeypatch.setattr(mt5_client, 'get_mt5_setting',
+                        lambda cfg, key, default='': '.m' if key == 'SYMBOL_SUFFIX' else default)
+    use(monkeypatch, FakeMT5(positions=[
+        position(900031, "USDJPY.m", 145.700, SELL, 44445, comment="@145.50"),
+    ]))
+    assert get_order_ticket("EURUSD", "145.503", "") == ("900031", "44445")

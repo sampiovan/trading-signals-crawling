@@ -251,6 +251,12 @@ def _do_modify(signal):
 		new_price = entry if entry > 0 else order.price_open
 		new_sl = sl if sl > 0 else order.sl
 		new_tp = tp if tp > 0 else order.tp
+		# Il pip del commento dipende dal simbolo REALE del pending, non
+		# dall'asset del messaggio: il lookup può aver ripiegato sul commento
+		# ignorando un asset sbagliato, e una USDJPY con "@145.5030" al posto
+		# di "@145.50" non sarebbe più ritrovabile. Calcolato PRIMA della
+		# remove: un errore qui non deve lasciare il pending rimosso.
+		new_comment = format_price_comment(mt5_client.strip_symbol_suffix(order.symbol), new_price)
 
 		removed = _send_with_retry(lambda: {'action': TRADE_ACTION_REMOVE, 'order': ticket})
 		if not removed.ok:
@@ -272,7 +278,7 @@ def _do_modify(signal):
 				'sl': new_sl,
 				'tp': new_tp,
 				'magic': order.magic,
-				'comment': format_price_comment(signal['asset'], new_price),
+				'comment': new_comment,
 				'type_time': ORDER_TIME_GTC,
 				'type_filling': _filling_mode(order.symbol),
 			}
