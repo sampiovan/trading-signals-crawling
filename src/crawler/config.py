@@ -1,6 +1,5 @@
 import configparser
 
-
 # Cache del ConfigParser: il file viene letto una sola volta
 _config = None
 
