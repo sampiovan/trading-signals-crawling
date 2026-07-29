@@ -80,13 +80,19 @@ def _comment_fallback(target_asset, entry, target_signal, reason):
 	return None, None
 
 
-def get_order_ticket(asset, entry, signal_type, tol_pips=2):
+def get_order_ticket(asset, entry, signal_type, tol_pips=2, allow_comment_fallback=True):
 	"""
 	Cerca tra le posizioni aperte e gli ordini pendenti live quello che
 	meglio corrisponde al segnale: stesso asset, stesso signal_type (se
 	indicato) e prezzo d'ingresso entro tol_pips pip. Tra i candidati
 	vince quello con l'entry più vicina.
 	Restituisce (ticket, magic_number) come stringhe, o (None, None).
+
+	allow_comment_fallback=False disattiva il ripiego sul commento che
+	IGNORA l'asset: serve a chi non sta cercando "l'ordine di cui parla il
+	canale" ma deve rispondere a "è esattamente questo ordine?" — lì un
+	ordine su un altro simbolo non è mai la risposta giusta (vedi
+	main._already_executed).
 	"""
 	target_asset = asset.strip().upper()
 	target_signal = signal_type.strip().upper()
@@ -103,6 +109,9 @@ def get_order_ticket(asset, entry, signal_type, tol_pips=2):
 	except Exception:	# noqa: BLE001 - QUALUNQUE errore di risoluzione deve
 		# ripiegare sul commento (resolve_symbol solleva ValueError, ma sotto
 		# c'è il package MT5: restringere qui farebbe perdere il segnale)
+		if not allow_comment_fallback:
+			logger.warning(f"Lookup: simbolo non risolvibile per asset {target_asset}.")
+			return None, None
 		return _comment_fallback(target_asset, entry, target_signal, 'simbolo non risolvibile')
 
 	# Il commento "@prezzo" è l'identificatore stabile del segnale: dopo un
@@ -146,6 +155,9 @@ def get_order_ticket(asset, entry, signal_type, tol_pips=2):
 		logger.info(f"Trovato ordine live: asset {target_asset}, entry {target_entry}, "
 		            f"ticket {best[0]}, magic {best[1]}")
 		return str(best[0]), str(best[1])
+
+	if not allow_comment_fallback:
+		return None, None
 
 	# Sul simbolo dichiarato non c'è nulla: può essere l'asset sbagliato ma
 	# esistente (il canale scrive "AUD/USD" col prezzo di una AUD/NZD), che

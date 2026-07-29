@@ -177,6 +177,40 @@ def test_lookup_fallback_wins_over_untouched_position_on_stated_asset(monkeypatc
     assert get_order_ticket("AUDUSD", "1.20200", "") == ("2", "222")
 
 
+def test_lookup_without_fallback_ignores_other_symbols(monkeypatch):
+    # allow_comment_fallback=False: lo stesso scenario che col fallback
+    # troverebbe la posizione AUDNZD qui NON deve trovare nulla
+    use(monkeypatch, FakeMT5(positions=[
+        position(500480335, "AUDNZD", 1.20180, SELL, 92925, comment="@1.2020"),
+    ]))
+    assert get_order_ticket("AUDUSD", "1.20200", "") == ("500480335", "92925")
+    assert get_order_ticket("AUDUSD", "1.20200", "",
+                            allow_comment_fallback=False) == (None, None)
+
+
+def test_lookup_without_fallback_still_matches_the_right_symbol(monkeypatch):
+    # Disattivare il fallback non indebolisce la ricerca normale: sull'asset
+    # giusto la posizione si trova sia per prezzo sia per commento
+    use(monkeypatch, FakeMT5(positions=[
+        position(1, "EURUSD", 1.12500, BUY, 111),
+        position(2, "GBPUSD", 1.32100, SELL, 222, comment="@1.3390 (-120)"),
+    ]))
+    assert get_order_ticket("EURUSD", "1.12500", "BUY",
+                            allow_comment_fallback=False) == ("1", "111")
+    assert get_order_ticket("GBPUSD", "1.33900", "SELL",
+                            allow_comment_fallback=False) == ("2", "222")
+
+
+def test_lookup_without_fallback_on_unresolvable_symbol(monkeypatch):
+    # Simbolo inesistente e fallback disattivato: nessun ripiego, (None, None)
+    use(monkeypatch, FakeMT5(positions=[
+        position(900020, "GBPUSD", 1.35340, SELL, 99599, comment="@1.3495 (-82)"),
+    ]))
+    unresolvable_symbols(monkeypatch)
+    assert get_order_ticket("GPSUSD", "1.34946", "",
+                            allow_comment_fallback=False) == (None, None)
+
+
 def test_lookup_comment_fallback_uses_real_symbol_pip(monkeypatch):
     # Refuso su una coppia JPY ("USDJPI"): il prezzo del commento va
     # arrotondato col pip del simbolo REALE del candidato (2 decimali),
