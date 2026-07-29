@@ -25,6 +25,13 @@ giornaliero** (5% del deposito iniziale, con stop delle aperture all'80% del bud
   passava inosservata).
 - Chiusura multipla: due righe dello stesso messaggio che risolvono sullo **stesso
   ticket** non producono più due chiusure: la seconda viene saltata e notificata.
+- La deduplica del catch-up non usa più il ripiego sul commento: lì la domanda è
+  "è ESATTAMENTE questo ordine?", e ignorando l'asset si poteva agganciare un ordine
+  di un'altra coppia con lo stesso prezzo nel commento, facendo saltare in silenzio
+  un'apertura legittima al riavvio. Il ripiego resta invariato per tutti gli altri
+  usi del lookup (chiusura, "Aperto", modifica, annullamento, move SL).
+- Il salto di un'apertura giudicata "già eseguita" durante il catch-up ora arriva
+  anche nei Saved Messages: un ordine non eseguito non resta più solo nel log.
 - I decimali del commento "@prezzo" vengono ora dal **simbolo reale dell'ordine**,
   senza il `SYMBOL_SUFFIX` del broker, invece che dall'asset dichiarato dal messaggio
   o da un simbolo col suffisso (che non finisce per `JPY`). Una USDJPY finiva con
