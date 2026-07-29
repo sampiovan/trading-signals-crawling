@@ -44,8 +44,17 @@ def _already_executed(signal):
 	non apre due posizioni allo stesso prezzo, e il replay in ordine
 	cronologico gestisce comunque placement→close→placement identico.
 	"""
+	# allow_comment_fallback=False: qui la domanda è "è ESATTAMENTE questo
+	# ordine?", non "quale ordine intendeva il canale". Il ripiego sul
+	# commento ignora l'asset e potrebbe agganciare un ordine di un'altra
+	# coppia con lo stesso prezzo nel commento, facendo saltare
+	# un'apertura legittima. Un asset sbagliato nel messaggio di
+	# piazzamento sarebbe stato eseguito su quell'asset sbagliato, quindi
+	# la ricerca normale lo troverebbe comunque: il fallback qui non
+	# aggiunge nulla, solo rischio.
 	ticket, _ = order_lookup.get_order_ticket(
-		signal['asset'], signal['entry'], signal['signal_type'])
+		signal['asset'], signal['entry'], signal['signal_type'],
+		allow_comment_fallback=False)
 	return ticket
 
 
@@ -105,11 +114,19 @@ async def process_message(client, message, state_path, catching_up=False):
 		for signal in signals:
 			if (catching_up and signal['message_type'] in ('placement', 'open')
 					and not signal['order_id'] and _already_executed(signal)):
+				detail = (f"{signal['message_type']} {signal['signal_type']} "
+				          f"{signal['asset']} @{signal['entry']}")
 				logger.warning(
-					f"Catch-up: {signal['message_type']} {signal['signal_type']} "
-					f"{signal['asset']} @{signal['entry']} risulta già eseguito "
+					f"Catch-up: {detail} risulta già eseguito "
 					f"(crash prima del salvataggio dello stato?): salto il doppione."
 				)
+				# Un'apertura NON eseguita non deve restare sepolta nel log:
+				# se la deduplica sbagliasse, il segnale sarebbe perso in silenzio
+				await _alert(client, (
+					"⚠️ Catch-up: apertura SALTATA come già eseguita\n"
+					f"Segnale: {detail}\n"
+					"Verificare sul terminale che la posizione esista davvero."
+				))
 				continue
 			outcome = executor.execute(signal)
 			if not outcome.ok:

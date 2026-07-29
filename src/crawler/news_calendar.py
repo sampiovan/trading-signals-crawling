@@ -50,7 +50,7 @@ def _parse_events(raw_events):
 
 def _load_cache(path):
 	try:
-		with open(path, 'r', encoding='utf-8') as f:
+		with open(path, encoding='utf-8') as f:
 			cache = json.load(f)
 		return cache if isinstance(cache, dict) else None
 	except (OSError, ValueError):

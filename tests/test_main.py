@@ -30,7 +30,8 @@ class FakeClient:
 @pytest.fixture
 def pipeline(monkeypatch, tmp_path):
     """Pipeline con parser, executor e lookup finti; ritorna i registri delle chiamate."""
-    calls = SimpleNamespace(executed=[], lookups=[], signals=[], live_ticket=None, skips=[])
+    calls = SimpleNamespace(executed=[], lookups=[], signals=[], live_ticket=None,
+                            skips=[], fallback_flags=[])
 
     def fake_parse(text, reply_text=None, on_skip=None):
         for detail in calls.skips:
@@ -43,8 +44,9 @@ def pipeline(monkeypatch, tmp_path):
         return SimpleNamespace(ok=True, ticket=777, retcode=10009, message="ok")
     monkeypatch.setattr(crawler_main.executor, 'execute', fake_execute)
 
-    def fake_lookup(asset, entry, signal_type):
+    def fake_lookup(asset, entry, signal_type, allow_comment_fallback=True):
         calls.lookups.append((asset, entry, signal_type))
+        calls.fallback_flags.append(allow_comment_fallback)
         return (calls.live_ticket, "12345") if calls.live_ticket else (None, None)
     monkeypatch.setattr(crawler_main.order_lookup, 'get_order_ticket', fake_lookup)
 
@@ -67,6 +69,40 @@ def test_catchup_skips_placement_already_executed(pipeline):
     assert pipeline.lookups  # il lookup è stato interrogato
     from crawler.crawler_state import load_last_message_id
     assert load_last_message_id(path=pipeline.state_path) == 100
+
+
+def test_catchup_dedup_never_uses_the_comment_fallback(pipeline):
+    # La deduplica chiede "è ESATTAMENTE questo ordine?": il ripiego sul
+    # commento ignora l'asset e potrebbe agganciare un'altra coppia con lo
+    # stesso prezzo nel commento, facendo saltare un'apertura legittima
+    pipeline.signals = [signal("placement")]
+    pipeline.live_ticket = None
+    process(pipeline, catching_up=True)
+    assert pipeline.fallback_flags == [False]
+
+
+def test_catchup_skip_alerts_telegram(pipeline):
+    # Un'apertura non eseguita non deve restare sepolta nel log: se la
+    # deduplica sbagliasse, il segnale sarebbe perso in silenzio
+    pipeline.signals = [signal("placement")]
+    pipeline.live_ticket = "555"
+
+    client = FakeClient()
+    asyncio.run(crawler_main.process_message(
+        client, message(), pipeline.state_path, catching_up=True))
+
+    assert pipeline.executed == []
+    assert client.alerts and "SALTATA" in client.alerts[0][1]
+
+
+def test_live_message_still_allows_the_fallback(pipeline):
+    # Fuori dal catch-up la deduplica non gira affatto: nessun lookup, quindi
+    # il fallback resta disponibile a chi cerca l'ordine citato dal canale
+    pipeline.signals = [signal("placement")]
+    pipeline.live_ticket = "555"
+    process(pipeline, catching_up=False)
+    assert pipeline.fallback_flags == []
+    assert len(pipeline.executed) == 1
 
 
 def test_catchup_executes_placement_not_yet_live(pipeline):
